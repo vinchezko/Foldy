@@ -1,0 +1,3 @@
+PyQt6>=6.5
+pywin32>=306
+pyinstaller>=6.0      # only needed to build Foldy.exe

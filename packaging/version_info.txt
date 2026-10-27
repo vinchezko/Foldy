@@ -1,0 +1,29 @@
+# UTF-8
+# Windows "Details" tab for Foldy.exe. A complete version resource (publisher, product, copyright) makes the exe
+# look like a real application to SmartScreen/antivirus heuristics instead of an anonymous unsigned binary.
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable('040904B0', [
+        StringStruct('CompanyName', 'vinchezko'),
+        StringStruct('FileDescription', 'Foldy - fan stacks for the Windows taskbar'),
+        StringStruct('FileVersion', '1.0.0.0'),
+        StringStruct('InternalName', 'Foldy'),
+        StringStruct('LegalCopyright', 'Copyright (c) 2026 vinchezko. MIT License.'),
+        StringStruct('OriginalFilename', 'Foldy.exe'),
+        StringStruct('ProductName', 'Foldy'),
+        StringStruct('ProductVersion', '1.0.0.0')])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
