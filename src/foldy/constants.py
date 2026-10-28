@@ -2,10 +2,13 @@
 import os
 
 
-APP, VERSION = "Foldy", "1.0.0"
+APP, VERSION = "Foldy", "1.1.0"
 
 
 AUTHOR, GITHUB = "vinchezko", "https://github.com/vinchezko"
+
+
+REPO, ASSET_NAME = "vinchezko/Foldy", "Foldy.exe"       # where updates are published (a GitHub release with Foldy.exe attached)
 
 
 PIPE = "FoldyHub"

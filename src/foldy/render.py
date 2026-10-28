@@ -108,12 +108,13 @@ def entries_for(folder, sort):
 
 
 class Elt:
-    """One fan element: a file/folder item (idx >= 0) or the 'Open in Explorer' header."""
+    """One fan element: a file/folder item (idx >= 0), the 'Open in Explorer' header or the 'back' pill."""
     def __init__(self, kind, path, name, dpr, is_dir=False, idx=-1):
         self.kind, self.path, self.idx = kind, path, idx
         self.label, self.lw, self.lh, self.lm = glass_label(name, dpr)
-        self.icon = None if kind == "header" else icon_pixmap(path, is_dir)
+        self.icon = None if kind in ("header", "back") else icon_pixmap(path, is_dir)
+        self.nav = False                                            # a folder that can be opened inside the fan
         self.x = self.v = self.target = self.pending = 0.0          # spring state (open progress 0..1)
         self.t_switch = None
         self.hs, self.edge, self.slot = 1.0, 1.0, QPointF()        # hover scale, edge fade, layout position
-        self.lv = 1.0 if (kind == "header" or S["labels"]) else 0.0  # label visibility (smoothed)
+        self.lv = 1.0 if (kind in ("header", "back") or S["labels"]) else 0.0  # label visibility (smoothed)

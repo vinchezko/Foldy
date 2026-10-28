@@ -94,8 +94,11 @@ def run_installer(args, px=None, py=None):
     app.setWindowIcon(QIcon(asset("foldy.png")))
     render.ICONS = QFileIconProvider()
     steps = installer_steps(sys.executable)
-    win = StepWindow("Installing Foldy", [s[0] for s in steps], stop_on_error=True,
-                     done_title="Foldy is installed", done_sub="Starting Foldy…")
+    updating = "--update" in args                                   # started by the in-app updater: swap files, restart quietly
+    if updating:
+        args = ["--hub"]
+    win = StepWindow("Updating Foldy" if updating else "Installing Foldy", [s[0] for s in steps], stop_on_error=True,
+                     done_title="Foldy is up to date" if updating else "Foldy is installed", done_sub="Starting Foldy…")
 
     def done(ok):
         extra = ["--px", str(px), "--py", str(py)] if px is not None and "--px" not in args else []

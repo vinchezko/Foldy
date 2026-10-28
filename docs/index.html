@@ -67,7 +67,7 @@
       </a>
       <a class="btn btn-ghost btn-big" data-repo href="https://github.com/vinchezko/Foldy">View source</a>
     </div>
-    <p class="fine">Windows 10 &amp; 11 · free · open source · a single file</p>
+    <p class="fine">Windows 10 &amp; 11 · free · open source · a single file <span class="dl-count" data-dlcount hidden>· <b data-dlnum>0</b> downloads</span></p>
   </div>
 
   <div class="stage-wrap reveal">
@@ -95,7 +95,7 @@
     <h2 class="reveal">A better way to reach the folders you use every day.</h2>
     <div class="grid">
       <article class="card reveal"><div class="card-ic">📌</div><h3>Pin as many as you like</h3><p>Every folder becomes its own real taskbar button with its own coloured icon. No background clutter, no extra bars.</p></article>
-      <article class="card reveal"><div class="card-ic">🎯</div><h3>Opens exactly above the button</h3><p>Foldy remembers where you clicked and asks Windows for that button's real position, so the fan lands right on top of it, even if you flick the mouse away.</p></article>
+      <article class="card reveal"><div class="card-ic">🎯</div><h3>Opens exactly above the button</h3><p>Foldy remembers where you clicked and asks Windows for that button's real position, so the fan lands right on top of it, even if you flick the mouse away. It works with <kbd>Win</kbd>+<kbd>1</kbd>…<kbd>9</kbd> too.</p></article>
       <article class="card reveal"><div class="card-ic">🌀</div><h3>Spring-physics animation</h3><p>Items fan out one after another with a little overshoot, and fold back the same way. Runs at your display's full refresh rate.</p></article>
       <article class="card reveal"><div class="card-ic">🔍</div><h3>Fisheye hover</h3><p>Icons magnify under your pointer and gently push their neighbours aside, so nothing ever overlaps.</p></article>
       <article class="card reveal"><div class="card-ic">🧈</div><h3>Buttery scrolling</h3><p>Big folders scroll with momentum and a soft rubber-band at both ends, with items fading in and out at the edges.</p></article>
@@ -110,7 +110,7 @@
   <div class="wrap">
     <p class="eyebrow reveal">Try it</p>
     <h2 class="reveal">Change the settings. Watch it respond.</h2>
-    <p class="sub reveal">This is the real fan layout and physics, ported to the browser. Click a folder, then drag the sliders.</p>
+    <p class="sub reveal">This is the real fan layout and physics, ported to the browser. Click a folder, then drag the sliders. Try <b>Projects</b> and click a folder inside it.</p>
     <div class="try-grid">
       <div class="stage-wrap reveal">
         <div class="stage stage-small" id="stage-try">
@@ -133,7 +133,7 @@
           <div class="win-head">
             <img src="assets/foldy.png" alt="" width="34" height="34">
             <div><b>Foldy</b><small>Fan stacks for your taskbar</small></div>
-            <span class="by">v1.0.0 · by <a href="https://github.com/vinchezko" data-owner>vinchezko</a></span>
+            <span class="by">v1.1.0 · by <a href="https://github.com/vinchezko" data-owner>vinchezko</a></span>
           </div>
           <div class="sliders" id="sliders"></div>
           <div class="opts">
@@ -141,6 +141,7 @@
             <label class="chk"><input type="checkbox" id="o-auto" checked> Start with Windows</label>
             <label class="chk"><input type="checkbox" id="o-labels" checked> Always show names</label>
             <label class="chk"><input type="checkbox" id="o-nat"> Natural scrolling</label>
+            <label class="chk wide"><input type="checkbox" id="o-sub" checked> Open sub-folders inside the fan (with a back button)</label>
           </div>
           <div class="win-actions">
             <button class="wbtn accent" id="b-preview">Preview fan</button>
@@ -173,7 +174,7 @@
       <div class="how-steps">
         <div class="step" data-n="0"><h3>Pin</h3><p>Pick a folder and Foldy creates a shortcut in <code>Documents\Foldy</code> with its own coloured icon and its own taskbar identity, then pins it for you. Each folder is a separate button.</p></div>
         <div class="step" data-n="1"><h3>Click</h3><p>The button runs a tiny launcher that starts in about 100&nbsp;ms and passes your click to the resident app through a named pipe. It never unpacks anything.</p></div>
-        <div class="step" data-n="2"><h3>Locate</h3><p>Foldy recorded where the mouse button was released at that instant, so it doesn't matter where the pointer is now. It asks Windows (UI Automation) for that button's exact rectangle and reads the taskbar's real size. Scale, taskbar size and auto-hide are all handled.</p></div>
+        <div class="step" data-n="2"><h3>Locate</h3><p>Foldy recorded where the mouse button was released at that instant, so it doesn't matter where the pointer is now. It asks Windows (UI Automation) for that button's exact rectangle and reads the taskbar's real size. Pressed <kbd>Win</kbd>+<kbd>1</kbd> instead? There's no click, so Foldy finds the button by its identity. Scale, taskbar size and auto-hide are all handled.</p></div>
         <div class="step" data-n="3"><h3>Fan</h3><p>A small click-through overlay draws the items along an arc with springs, magnification and kinetic scrolling. Click an item to open it; click anywhere else, or press <kbd>Esc</kbd>, to fold it away.</p></div>
       </div>
     </div>
@@ -207,7 +208,7 @@
               <circle cx="70" cy="70" r="52" class="ring-bg"/>
               <circle cx="70" cy="70" r="52" class="ring" id="ring" transform="rotate(-90 70 70)"/>
               <circle cx="70" cy="70" r="40" class="hold-face" id="hold-face"/>
-              <svg x="50" y="50" width="40" height="40" viewBox="0 0 48 48" style="color:#ebeef5" id="trash-svg"><use href="#i-trash"/></svg>
+              <svg x="50" y="50" width="40" height="40" viewBox="0 0 48 48" style="color:#ebeef5;overflow:visible" id="trash-svg"><g fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><g id="trash-body"><path d="M13 18l2.4 22h17.2L35 18"/><path d="M21 25v9M27 25v9"/></g><g id="trash-lid"><path d="M9 14h30M19 14v-5h10v5"/></g></g></svg>
             </svg>
             <span id="hold-label">Hold to uninstall</span>
           </button>
@@ -256,11 +257,11 @@
     <img src="assets/foldy.png" alt="" width="120" height="120" class="get-logo">
     <h2>Ready to fan out?</h2>
     <p class="lead">Download the installer. It sets everything up for you and takes a few seconds.</p>
-    <a class="btn btn-huge" data-download href="https://github.com/vinchezko/Foldy/releases/latest/download/Foldy.exe">
+        <a class="btn btn-huge" data-download href="https://github.com/vinchezko/Foldy/releases/latest/download/Foldy.exe">
       <svg viewBox="0 0 24 24" width="26" height="26"><path d="M12 3v12m0 0l-5-5m5 5l5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Download Foldy.exe
     </a>
-    <p class="fine">Windows 10 &amp; 11 · free · MIT licensed · <a data-releases href="https://github.com/vinchezko/Foldy/releases">all releases</a> · <a data-repo href="https://github.com/vinchezko/Foldy">source code</a></p>
+    <p class="fine">Windows 10 &amp; 11 · free · MIT licensed · <a data-releases href="https://github.com/vinchezko/Foldy/releases">all releases</a> · <a data-repo href="https://github.com/vinchezko/Foldy">source code</a> <span class="dl-count" data-dlcount hidden>· <b data-dlnum>0</b> downloads</span></p>
   </div>
 </section>
 

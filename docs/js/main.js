@@ -23,6 +23,36 @@ $$("[data-releases]").forEach(a => (a.href = `${REPO_URL}/releases`));
 $$("[data-owner]").forEach(a => (a.href = `https://github.com/${REPO.split("/")[0]}`));
 $$(".pin").forEach(p => p.style.setProperty("--h", p.dataset.hue));
 
+/* ====================================================================== download counter */
+/* Sums the download_count of every .exe attached to the repo's releases (GitHub API, no key needed). The result is cached
+ * for 30 minutes so a busy page never hits the API's rate limit; if anything fails the counter simply stays hidden. */
+(async () => {
+  const pills = $$("[data-dlcount]");
+  if (!pills.length) return;
+  const KEY = "foldy.downloads.v1", TTL = 30 * 60 * 1000;
+  let total = null;
+  try { const c = JSON.parse(localStorage.getItem(KEY) || "null"); if (c && Date.now() - c.t < TTL) total = c.n; } catch (e) {}
+  if (total === null) {
+    try {
+      const r = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100`, { headers: { Accept: "application/vnd.github+json" } });
+      if (!r.ok) throw new Error(r.status);
+      total = (await r.json()).reduce((n, rel) => n + (rel.assets || []).filter(a => /\.exe$/i.test(a.name)).reduce((m, a) => m + (a.download_count || 0), 0), 0);
+      try { localStorage.setItem(KEY, JSON.stringify({ n: total, t: Date.now() })); } catch (e) {}
+    } catch (e) { return; }
+  }
+  if (!(total > 0)) return;                                   // nothing to brag about yet (or the API said nothing)
+  pills.forEach(p => {
+    p.hidden = false;
+    const num = $("[data-dlnum]", p), t0 = performance.now(), dur = reduced ? 1 : 1400;
+    const tick = now => {
+      const k = clamp((now - t0) / dur, 0, 1);
+      num.textContent = Math.round(total * (1 - Math.pow(1 - k, 3))).toLocaleString();
+      if (k < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+})();
+
 /* ====================================================================== reveal, nav, parallax */
 const io = "IntersectionObserver" in window
   ? new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { threshold: .12 })
@@ -56,7 +86,17 @@ const STACKS = {
   Photos: [["Summer 2025","folder"],["IMG_1001.jpg","img"],["IMG_1002.jpg","img"],["IMG_1003.jpg","img"],["Portrait.png","img"],["Sunset.jpg","img"],["Beach.jpg","img"],["Mountains.jpg","img"],["City night.jpg","img"],
     ["Family.jpg","img"],["Cat.jpg","img"],["Birthday.jpg","img"],["Panorama.jpg","img"],["Food.jpg","img"],["Road trip.mp4","video"],["Concert.jpg","img"],["Garden.png","img"],["Old scan.png","img"],["Sketchbook.zip","zip"],["Wallpapers","folder"],["Edit-07.jpg","img"],["Snow.jpg","img"]],
 };
-const DEF = { density: 1, speed: 1, glass: .9, magnify: .45, curve: .75, maxvis: 14, labels: true, natural: false, sort: 0 };
+/* contents of folders inside the stacks (key = "<stack>/<folder>"); folders can nest further */
+const SUB = {
+  "Projects/foldy": [["src","folder"],["docs","folder"],["README.md","doc"],["build.bat","code"],["Foldy.exe","code"],["LICENSE","doc"]],
+  "Projects/foldy/src": [["foldy","folder"],["run_foldy.py","code"],["launcher.py","code"]],
+  "Projects/foldy/docs": [["index.html","code"],["style.css","code"],["main.js","code"],["foldy.png","img"]],
+  "Projects/website": [["index.html","code"],["style.css","code"],["main.js","code"],["logo.png","img"],["about.md","doc"]],
+  "Projects/assets": [["icon.png","img"],["icon.ico","img"],["banner.jpg","img"],["mockup.png","img"]],
+  "Photos/Summer 2025": [["IMG_2001.jpg","img"],["IMG_2002.jpg","img"],["Beach.jpg","img"],["Sunset.jpg","img"],["Clip 1.mp4","video"],["Picnic.jpg","img"],["Hike.jpg","img"],["Pool.jpg","img"]],
+  "Photos/Wallpapers": [["Aurora.png","img"],["Dunes.png","img"],["Forest.png","img"],["City.png","img"],["Waves.png","img"]],
+};
+const DEF = { density: 1, speed: 1, glass: .9, magnify: .45, curve: .75, maxvis: 14, labels: true, natural: false, sort: 0, subfolders: true };
 
 /* ====================================================================== the fan (port of fan.py) */
 class Fan {
@@ -66,7 +106,8 @@ class Fan {
     this.toastEl = $(".toast", stage);
     this.state = "closed"; this.btn = null; this.name = null;
     this.mouse = null; this.hov = null; this.ghost = false; this.raf = 0; this.last = 0;
-    this.els = []; this.header = null; this.lift = 0; this.focus = 0;
+    this.els = []; this.header = null; this.back = null; this.lift = 0; this.focus = 0;
+    this.trail = []; this.nav = null; this.navScroll = 0; this.key = null; this.hw = this.bw = 100;
     this.scroll = this.sv = this.target = this.maxscroll = 0; this.tWheel = 0;
     this.onUser = null;
     stage.addEventListener("pointermove", e => {
@@ -99,7 +140,7 @@ class Fan {
     }
     const c = this.cfg;
     const s = this.stage.getBoundingClientRect(), b = btn.getBoundingClientRect(), t = this.tb.getBoundingClientRect();
-    this.btn = btn; this.name = name; this.byGhost = false;
+    this.btn = btn; this.name = name; this.byGhost = false; this.trail = []; this.nav = null;
     this.isz = Math.round(40 * c.density); this.sp = Math.round(52 * c.density);
     this.W = s.width; this.H = s.height;
     this.tbY = t.top - s.top;                                        // taskbar top edge
@@ -112,7 +153,14 @@ class Fan {
     this.bend = this.ox + ext + 90 <= this.W ? 1 : (this.ox - ext - 280 >= 0 ? -1 : 1);
     this.labelSide = this.ox < 280 ? 1 : -1;
 
-    let list = STACKS[name].slice();
+    this.setup(name, 0);
+    btn.classList.add("on");
+  }
+
+  /* (re)build the fan for one folder: used when opening, and again when diving into / coming back from a sub-folder */
+  setup(key, restore = 0) {
+    const c = this.cfg; this.key = key; this.state = "open";
+    let list = (STACKS[key] || SUB[key] || []).slice();
     if (c.sort === 1) list.sort((a, z) => a[0].localeCompare(z[0]));
     if (c.sort === 2) list.sort((a, z) => (a[1] !== "folder") - (z[1] !== "folder") || a[0].localeCompare(z[0]));
     this.maxscroll = Math.max(0, list.length - this.cap);
@@ -125,9 +173,9 @@ class Fan {
       ic.style.width = ic.style.height = this.isz + "px";
       const lb = document.createElement("div"); lb.className = "fl"; lb.textContent = nm;
       w.append(lb, ic); this.layer.appendChild(w);
-      const el = { i, w, ic, lb, nm, x: 0, v: 0, target: 0, pending: 1, ts: null, hs: 1, edge: 1, sx: 0, sy: 0, lv: c.labels ? 1 : 0, hf: false };
+      const el = { i, w, ic, lb, nm, ty, x: 0, v: 0, target: 0, pending: 1, ts: null, hs: 1, edge: 1, sx: 0, sy: 0, lv: c.labels ? 1 : 0, hf: false };
       for (const n of [ic, lb]) {
-        n.addEventListener("click", () => { this.toast(`Opens “${nm}”`); this.close(); });
+        n.addEventListener("click", () => this.pick(el));
         n.addEventListener("pointerenter", () => { el.hf = true; this.kick(); });
         n.addEventListener("pointerleave", () => { el.hf = false; this.kick(); });
       }
@@ -139,27 +187,55 @@ class Fan {
     hw.addEventListener("click", () => { this.toast("Opens the folder in Explorer"); this.close(); });
     hw.addEventListener("pointerenter", () => { this.hov = this.header; this.kick(); });
     hw.addEventListener("pointerleave", () => { this.hov = null; this.kick(); });
+    this.back = null;
+    if (this.trail.length) {                                         // inside a sub-folder: a pill that leads back up
+      const parent = this.trail[this.trail.length - 1].key.split("/").pop();
+      const bw = document.createElement("div"); bw.className = "fh fb"; bw.textContent = "◀  " + parent;
+      this.layer.appendChild(bw);
+      this.back = { i: -1, w: bw, x: 0, v: 0, target: 0, pending: 1, ts: null, hs: 1, sx: 0, sy: 0 };
+      bw.addEventListener("click", () => this.goBack());
+      bw.addEventListener("pointerenter", () => { this.hov = this.back; this.kick(); });
+      bw.addEventListener("pointerleave", () => { this.hov = null; this.kick(); });
+      this.bw = bw.offsetWidth;
+    }
+    this.hw = hw.offsetWidth;
 
     const T = performance.now() / 1000, spd = Math.max(c.speed, .1);
     // items unfold one after another, but only the visible arc counts: items beyond it open with the last visible one,
     // and the "Open in Explorer" pill appears almost at once (it used to wait for every item in the folder)
     this.els.forEach((el, rank) => { el.pending = 1; el.ts = T + Math.min(rank, this.cap) * .018 / spd; });
-    this.header.pending = 1; this.header.ts = T + .03 / spd;
-    this.state = "open"; btn.classList.add("on");
+    this.bars().forEach((el, k) => { el.pending = 1; el.ts = T + (.03 + k * .03) / spd; });
+    if (restore) this.scroll = this.target = clamp(restore, 0, this.maxscroll);     // coming back: land where you left off
     this.layout(); this.paint(); this.kick();
   }
 
-  close() {
+  bars() { return this.back ? [this.header, this.back] : [this.header]; }
+
+  pick(el) {
+    const sub = `${this.key}/${el.nm}`;
+    if (el.ty === "folder" && this.cfg.subfolders && SUB[sub]) return this.enter(sub);
+    this.toast(el.ty === "folder" ? `Opens “${el.nm}” in Explorer` : `Opens “${el.nm}”`); this.close();
+  }
+
+  enter(key) { this.trail.push({ key: this.key, scroll: this.target }); this.nav = key; this.navScroll = 0; this.close(true); }
+
+  goBack() {
+    const t = this.trail.pop(); if (!t || this.state !== "open") return;
+    this.nav = t.key; this.navScroll = t.scroll; this.close(true);
+  }
+
+  close(nav = false) {
     if (this.state !== "open") return;
-    this.state = "closing"; this.btn && this.btn.classList.remove("on");
-    const T = performance.now() / 1000, spd = Math.max(this.cfg.speed, .1);
-    [this.header, ...[...this.els].reverse()].forEach((el, rank) => { el.pending = 0; el.ts = T + rank * .01 / spd; });
+    if (!nav) { this.nav = null; this.trail = []; }                  // a real close forgets where you were
+    this.state = "closing"; if (!nav) this.btn && this.btn.classList.remove("on");
+    const T = performance.now() / 1000, spd = Math.max(this.cfg.speed, .1) * (nav ? 2 : 1);   // sub-folder swaps fold quicker
+    [...this.bars(), ...[...this.els].reverse()].forEach((el, rank) => { el.pending = 0; el.ts = T + rank * .01 / spd; });
     this.kick();
   }
 
   hardClose() {
     cancelAnimationFrame(this.raf); this.raf = 0;
-    this.layer.innerHTML = ""; this.els = []; this.header = null; this.state = "closed";
+    this.layer.innerHTML = ""; this.els = []; this.header = null; this.back = null; this.nav = null; this.trail = []; this.state = "closed";
     this.btn && this.btn.classList.remove("on");
   }
 
@@ -207,6 +283,7 @@ class Fan {
     for (const el of els) if (el.edge > .25) need = Math.max(need, el.sy + isz * el.hs * (.78 + .22 * el.edge) / 2 - limit);
     this.lift = Math.max(need, this.lift + (need - this.lift) * .35);
     if (this.lift > .01) { for (const el of els) el.sy -= this.lift; this.header.sy -= this.lift; }
+    if (this.back) { this.back.sx = this.header.sx - this.hw / 2 - this.bw / 2 - 12; this.back.sy = this.header.sy; }
   }
 
   paint() {
@@ -223,8 +300,7 @@ class Fan {
       el.lb.style.transform = this.labelSide < 0 ? `translate(calc(-100% - ${off}px),-50%)` : `translate(${off}px,-50%)`;
       el.lb.style.opacity = opL.toFixed(3);
     }
-    const h = this.header;
-    if (h) {
+    if (this.header) for (const h of this.bars()) {
       const cx = this.ox + h.x * (h.sx - this.ox), cy = this.oy + h.x * (h.sy - this.oy), sc = (.35 + .65 * clamp(h.x, 0, 1.1)) * h.hs;
       h.w.style.transform = `translate3d(${cx.toFixed(1)}px,${cy.toFixed(1)}px,0) translate(-50%,-50%) scale(${sc.toFixed(3)})`;
       h.w.style.opacity = clamp((h.x - .05) * 1.6, 0, 1).toFixed(3);
@@ -253,13 +329,13 @@ class Fan {
       const xm = this.ox + this.bend * this.R * (1 - Math.cos(sm / this.R));
       amp = c.magnify * Math.exp(-(((this.mouse.x - xm) / 320) ** 2));
     }
-    for (const el of [...this.els, this.header]) {
+    for (const el of [...this.els, ...this.bars()]) {
       if (el.ts !== null) { if (T >= el.ts) { el.target = el.pending; el.ts = null; } else busy = true; }
       const damp = el.target > .5 ? 22 : 32, n = Math.floor(dts / .004) + 1, h = dts / n;
       for (let k = 0; k < n; k++) { el.v += (300 * (el.target - el.x) - damp * el.v) * h; el.x += el.v * h; }
       if (Math.abs(el.target - el.x) > .002 || Math.abs(el.v) > .02) busy = true; else { el.x = el.target; el.v = 0; }
       let t = 1;
-      if (el === this.header) t = this.hov === el ? 1.06 : 1;
+      if (el === this.header || el === this.back) t = this.hov === el ? 1.06 : 1;
       else {
         t = 1 + amp * Math.exp(-(((el.i - f) * this.sp / (1.5 * this.sp)) ** 2)) * el.edge;
         const lt = c.labels || el.hf ? 1 : 0; el.lv += (lt - el.lv) * (1 - Math.exp(-dt * 14));
@@ -269,7 +345,10 @@ class Fan {
     }
     this.layout(); this.paint();
     if (busy || (this.state === "open" && this.mouse)) this.raf = requestAnimationFrame(m => this.tick(m));
-    else if (this.state === "closing") this.hardClose();
+    else if (this.state === "closing") {
+      if (this.nav) { const k = this.nav, sc = this.navScroll; this.nav = null; this.navScroll = 0; this.setup(k, sc); }   // unfold the sub-folder in place
+      else this.hardClose();
+    }
   }
 }
 
@@ -283,7 +362,10 @@ function makeFan(stageSel, tbSel, cfg) {
   return fan;
 }
 document.addEventListener("pointerdown", e => fans.forEach(f => { if (f.state === "open" && !f.contains(e.target)) f.close(); }));
-document.addEventListener("keydown", e => { if (e.key === "Escape") fans.forEach(f => f.close()); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") fans.forEach(f => f.close());
+  if (e.key === "Backspace") fans.forEach(f => { if (f.state === "open" && f.trail.length) { e.preventDefault(); f.goBack(); } });
+});
 let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => fans.forEach(f => f.state !== "closed" && f.hardClose()), 150); });
 
 const heroFan = makeFan("#stage-hero", "#tb-hero", { ...DEF, density: 1.12 });
@@ -316,8 +398,10 @@ function startTour(fan) {
     await sleep(2200);
     const order = ["Downloads", "Projects", "Photos"]; let n = 0;
     for (;;) {
+      try {
       if (!visible || !quiet() || fan.state !== "closed") { await sleep(900); continue; }
-      const btn = buttons.find(b => b.dataset.stack === order[n++ % 3]);
+      const wanted = order[n++ % 3];                                 // (advance once per cycle, not once per button checked)
+      const btn = buttons.find(b => b.dataset.stack === wanted);
       const s = stage.getBoundingClientRect(), b = btn.getBoundingClientRect();
       const bx = b.left - s.left + b.width / 2, by = b.top - s.top + b.height / 2;
       fan.ghost = true; ghost.classList.add("on"); place({ x: bx + 120, y: by + 30 });
@@ -329,12 +413,20 @@ function startTour(fan) {
         if (!(await move({ x: el.sx - 4, y: el.sy - 4 }, 700))) break;
         await sleep(380);
       }
+      if (fan.ghost && btn.dataset.stack === "Projects" && fan.els[0]) {   // dive into a folder inside the fan, then come back
+        const el0 = fan.els[0];
+        if (await move({ x: el0.sx - 4, y: el0.sy - 4 }, 700)) {
+          fan.pick(el0); await sleep(1800);
+          if (fan.ghost && fan.back && await move({ x: fan.back.sx - 6, y: fan.back.sy + 2 }, 800)) { fan.goBack(); await sleep(1600); }
+        }
+      }
       if (fan.ghost && fan.maxscroll > 0) {                          // show the kinetic scrolling too
         fan.target = Math.min(fan.maxscroll, fan.target + 6); fan.tWheel = performance.now() / 1000; fan.kick(); await sleep(1500);
         fan.target = 0; fan.tWheel = performance.now() / 1000; fan.kick(); await sleep(1200);
       }
       if (fan.ghost && fan.state === "open") fan.close();
       fan.ghost = false; ghost.classList.remove("on"); await sleep(1700);
+      } catch (err) { fan.ghost = false; ghost.classList.remove("on"); await sleep(2500); }   // never let the demo die silently
     }
   })();
 }
@@ -372,11 +464,12 @@ if (slWrap) {
   $("#o-sort").addEventListener("change", e => { tryCfg.sort = e.target.selectedIndex; rebuild(); });
   $("#o-labels").addEventListener("change", e => { tryCfg.labels = e.target.checked; tryFan.kick(); });
   $("#o-nat").addEventListener("change", e => { tryCfg.natural = e.target.checked; });
+  $("#o-sub").addEventListener("change", e => { tryCfg.subfolders = e.target.checked; });
   $("#b-preview").addEventListener("click", () => { const b = $$(".pin", tryFan.tb)[0]; tryFan.state === "open" ? tryFan.close() : tryFan.open(b); });
   $("#b-add").addEventListener("click", () => tryFan.toast("In the app this opens the Windows folder picker"));
   $("#b-reset").addEventListener("click", () => {
     Object.assign(tryCfg, DEF); SL.forEach(([k]) => syncRow(k));
-    $("#o-sort").selectedIndex = 0; $("#o-labels").checked = true; $("#o-nat").checked = false;
+    $("#o-sort").selectedIndex = 0; $("#o-labels").checked = true; $("#o-nat").checked = false; $("#o-sub").checked = true;
     tryFan.layer.style.setProperty("--ga", tryCfg.glass); rebuild();
   });
   $("#b-uninstall").addEventListener("click", () => { $("#install").scrollIntoView({ behavior: reduced ? "auto" : "smooth" }); setTimeout(() => $("#hold").focus({ preventScroll: true }), 700); });
@@ -426,7 +519,7 @@ if (instPanel) {
 
 const hold = $("#hold");
 if (hold) {
-  const ring = $("#ring"), face = $("#hold-face"), icon = $("#trash-svg"), label = $("#hold-label"), CIRC = 326.7;
+  const ring = $("#ring"), face = $("#hold-face"), icon = $("#trash-svg"), lid = $("#trash-lid"), label = $("#hold-label"), CIRC = 326.7;
   let p = 0, holding = false, done = false, last = 0, raf = 0;
   const mixc = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(",");
   const draw = () => {
@@ -434,7 +527,7 @@ if (hold) {
     ring.style.stroke = `rgb(${mixc([255, 176, 92], [255, 72, 92], p)})`;
     face.style.fill = `rgb(${mixc([44, 46, 54], [96, 34, 46], p)})`;
     icon.style.color = `rgb(${mixc([235, 238, 245], [255, 150, 160], p)})`;
-    icon.style.transform = `rotate(${(-8 * p).toFixed(1)}deg)`; icon.style.transformOrigin = "20px 20px";
+    lid.setAttribute("transform", `rotate(${(24 * p).toFixed(1)} 37 14) translate(0 ${(-2.5 * p).toFixed(1)})`);   // only the lid tilts open, hinged at its right end
     label.textContent = done ? "Uninstalling…" : p > .02 ? "Keep holding…" : "Hold to uninstall";
   };
   const tick = now => {

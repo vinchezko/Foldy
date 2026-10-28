@@ -15,14 +15,19 @@ Pin any folder. Click it. Its contents spring out above the button along a smoot
 ## Features
 
 - **Pin as many folders as you like.** Each becomes its own real taskbar button with its own coloured icon.
-- **Opens exactly above the button you clicked.** Foldy records the click itself and asks Windows (UI Automation) for that button's real rectangle, so it doesn't matter where the pointer goes afterwards. It reads the taskbar's real size too, so any display scale, taskbar size or auto-hide setup works and the fan never overlaps the taskbar.
+- **Opens exactly above the right button.** For a mouse click, Foldy records the click itself and asks Windows (UI Automation) for that button's real
+  rectangle, so it doesn't matter where the pointer goes afterwards. For **Win+1, Win+2…** (no click at all) it notes which number you pressed and finds that button by its identity, then by its position on the bar, so
+  the mouse can be anywhere. It reads the taskbar's real size too, so any display scale, taskbar size or auto-hide setup works and the fan never overlaps the taskbar.
 - **Spring-physics animation**, staggered per item, timed per frame so it stays smooth at any refresh rate.
 - **Fisheye hover** that pushes neighbours apart, so icons never collide.
 - **Kinetic scrolling** for big folders: momentum, rubber-band at the ends, edge fades.
+- **Folders inside folders** (optional, on by default): click a folder in the fan and it unfolds in place, with a ◀ back pill. Toggle it in Settings.
 - **Fast.** Pinned buttons run a ~100 ms launcher; icons and labels are pre-loaded.
-- **Compact settings window** (density, speed, glass opacity, magnification, arc curve, item count, sorting…) with a reset button on every slider.
+- **Compact settings window** (density, speed, glass opacity, magnification, arc curve, item count, sorting…) with animated switches, a sliding sort control and a reset button on every slider.
+- **Updates itself, politely.** Foldy checks this repository's latest GitHub release (at start-up and every 6 hours; switch it off in Settings). When there is a newer version it asks **Update now / Later**. *Later* leaves a green **Update** button next to *Reset all* (and an entry in the tray menu). The download comes only from this repo's releases and is checked against its size and SHA-256 before it is installed.
+- **Pins harder.** If Windows refuses every automatic pin route, a small card appears whose icon you drag onto the taskbar.
 - **Clean install and uninstall**, each with a live progress window. Uninstall is a hold-to-confirm ring button.
-- **Private.** No network access, no telemetry.
+- **Private.** No telemetry. The only network request is the update check to `api.github.com` (and only if you leave it on).
 
 ## Install
 
@@ -44,7 +49,8 @@ Supported: Windows 10 / 11 (64-bit), taskbar at the bottom of the primary monito
 | Click **Open in Explorer ↗** (top of the arc) | Opens the folder |
 | Scroll wheel / touchpad | Scrolls long folders |
 | Click outside, `Esc`, or the button again | Closes the fan |
-| Tray icon → **Settings…** | Opens the settings window |
+| Click a folder in the fan | Opens it inside the fan; **◀** (or `Backspace`) goes back up |
+| Click the tray icon (or right-click → **Settings…**) | Opens the settings window |
 | Settings → **Uninstall** | Hold the ring button to remove Foldy completely |
 
 ## Build from source
@@ -64,7 +70,11 @@ Run from source without building: `pip install PyQt6 pywin32`, then `python src\
 
 ### Publishing a release
 
-Build, then attach `dist\Foldy.exe` to a GitHub release. Keep the file name `Foldy.exe` so the website's download button works.
+Build, then attach `dist\Foldy.exe` to a GitHub release. Keep the file name `Foldy.exe` so the website's download button and the in-app updater work.
+
+For updates to be offered, tag the release with a version **higher than the one users run** (`v1.1.0` → `v1.1.1`, `v1.2.0`…) and publish it as a normal release (not a draft or pre-release). Bump `VERSION` in `src/foldy/constants.py` and the two numbers in `packaging/version_info.txt` before building. People on v1.0.0 have no updater yet, so they install v1.1.0 once by hand.
+
+The website's download counter adds up the `.exe` downloads of all releases (it includes updates downloaded by the app).
 
 ## Website
 
@@ -86,6 +96,9 @@ src/
     render.py           cached icons, glass labels, folder listings
     winutil.py          Windows helpers: taskbar geometry, UI Automation, click tracker
     shortcuts.py        shortcut icons, .lnk creation, taskbar pinning, folder picker
+    updater.py          GitHub release check, verified download
+    update_window.py    'Update now / Later' window and the drag-to-pin helper
+    controls.py         animated switch and sliding segmented control
     settings.py, settings_window.py, installer.py, uninstaller.py, widgets.py, styles.py,
     ipc.py, constants.py, util.py
   launcher/launcher.py  tiny stdlib-only launcher that pinned buttons run (built to fsl.exe)

@@ -31,10 +31,20 @@ QFrame#sep{background:#30323a;max-height:1px;min-height:1px;}
 
 COMPACT_QSS = SETTINGS_QSS + """
 QWidget{font:12px 'Segoe UI Variable Text','Segoe UI';}
-QLabel#title{font-size:17px;font-weight:600;}
-QLabel#val{min-width:36px;}
-QSlider::handle:horizontal{width:14px;height:14px;margin:-5px 0;border-radius:7px;}
-QPushButton{padding:5px 12px;}
-QComboBox{padding:4px 8px;min-width:118px;}
-QCheckBox{spacing:8px;}
+QLabel{background:transparent;}
+QLabel#title{font-size:20px;font-weight:600;}
+QLabel#val{min-width:38px;}
+QLabel#hint{color:#7d8392;font-size:11px;}
+QLabel#sec{color:#6e7585;font-size:10px;font-weight:700;letter-spacing:1px;}
+QLabel#pill{background:#262830;border:1px solid #3a3d48;border-radius:9px;padding:1px 9px;color:#c8ccd6;font-size:11px;}
+QFrame#card{background:#23252d;border:1px solid #2f323b;border-radius:12px;}
+QSlider::groove:horizontal{height:5px;background:#363943;border-radius:2px;}
+QSlider::sub-page:horizontal{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #4cc9ff,stop:1 #808cff);border-radius:2px;}
+QSlider::handle:horizontal{background:#ffffff;width:12px;height:12px;margin:-5px 0;border-radius:8px;border:2px solid #4cc9ff;}
+QSlider::handle:horizontal:hover{background:#e3f6ff;border-color:#808cff;}
+QPushButton{padding:5px 13px;}
+QPushButton#ghost{background:transparent;border:1px solid #3d404a;color:#c8ccd6;}
+QPushButton#ghost:hover{background:#2c2e37;color:#ffffff;}
+QPushButton#update{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #3ddc97,stop:1 #4cc9ff);color:#06222e;border:none;font-weight:700;padding:5px 12px;}
+QPushButton#update:hover{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #6ff0b8,stop:1 #7bd9ff);}
 """

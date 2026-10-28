@@ -1,5 +1,5 @@
 """The fan overlay: arc layout, spring animation, push-apart magnification and kinetic scrolling."""
-import math, time
+import math, os, time
 from PyQt6.QtCore import QPointF, QRect, QRectF, QTimer, Qt
 from PyQt6.QtGui import QColor, QCursor, QPainter, QRadialGradient, QRegion
 from PyQt6.QtWidgets import QApplication, QWidget
@@ -22,6 +22,9 @@ class FanOverlay(QWidget):
         self.setMouseTracking(True)
         self.entries, self.cache, self.header = [], {}, None
         self.folder, self.is_open = None, False
+        self.root, self.loc, self.back = None, {}, None              # pinned folder, where it opened, the 'back' pill
+        self.stack, self.nav_to, self.restore = [], None, None       # folders-in-folders: ancestors, target, scroll to restore
+        self._bs = False
         self.mouse = self.hover = None
         self.bend, self.label_side, self.origin, self.start = 1, -1, QPointF(), 70.0
         self.sp, self.isz, self.R, self.cap, self.dpr = BASE_SP, BASE_ICON, 900.0, 10, 1.0
@@ -78,6 +81,10 @@ class FanOverlay(QWidget):
         self.scroll = self.sv = self.target = 0.0
         self.cache = {}
         self.header = Elt("header", folder, "Open in Explorer  ↗", self.dpr)
+        self.back = None
+        if self.stack:                                              # inside a sub-folder: a pill that leads back up
+            parent = self.stack[-1][0]
+            self.back = Elt("back", parent, "◀  " + (os.path.basename(parent.rstrip("\\/")) or parent), self.dpr)
         self.ensure_cache()
 
         ytop = self.origin.y() - self.start - self.R * math.sin(reach / self.R) - 70
@@ -97,6 +104,7 @@ class FanOverlay(QWidget):
             if i not in self.cache:
                 _, name, path, isd = self.entries[i]
                 el = Elt("item", path, name, self.dpr, isd, i)
+                el.nav = bool(isd) and path != self.folder
                 if self.is_open:                                    # scrolled in after the open animation
                     el.x = el.target = el.pending = 1.0
                 self.cache[i] = el
@@ -104,49 +112,90 @@ class FanOverlay(QWidget):
             del self.cache[i]
 
     # ---- open / close
+    def _bars(self):
+        """The pill-shaped elements at the top of the arc: 'Open in Explorer' and, inside a sub-folder, 'back'."""
+        return [self.header] + ([self.back] if self.back is not None else [])
+
     def open_fan(self, folder, loc):
-        if self.isVisible() and folder != self.folder:              # switching stacks: hard swap
+        if self.isVisible() and folder != self.root:                # switching stacks: hard swap
             self.hide_now()
         if not self.isVisible():
-            self.folder = folder
+            self.root = self.folder = folder
+            self.loc, self.stack, self.nav_to = loc, [], None
             self.is_open = False
             self.build(folder, loc)
             self.show()
             pin_topmost(self)
+        self.unfold()
+
+    def unfold(self):
         self.is_open = True
         self.t_open = now = time.perf_counter()
         spd = max(S["speed"], 0.1)
         for rank, i in enumerate(sorted(self.cache)):               # items unfold one after another...
             el = self.cache[i]
             el.pending, el.t_switch = 1.0, now + min(rank, self.cap) * STAG_OPEN / spd
-        self.header.pending, self.header.t_switch = 1.0, now + 2 * STAG_OPEN / spd   # ...but the header doesn't wait for them
+        for k, el in enumerate(self._bars()):                       # ...but the pills don't wait for them
+            el.pending, el.t_switch = 1.0, now + (2 + k) * STAG_OPEN / spd
         self.poll.start()
         self.start_timer()
 
-    def close_fan(self):
+    def close_fan(self, nav=False):
+        if not nav:
+            self.nav_to, self.stack = None, []                      # a real close forgets where we were
         if not self.isVisible() or self.header is None:
             return
         self.is_open = False
         self.poll.stop()
         now = time.perf_counter()
-        spd = max(S["speed"], 0.1)
-        order = [-1] + sorted(self.cache, reverse=True)              # header first, nearest item last
-        for rank, i in enumerate(order):
-            el = self.header if i == -1 else self.cache[i]
+        spd = max(S["speed"], 0.1) * (2.0 if nav else 1.0)          # sub-folder swaps fold away quicker
+        order = self._bars() + [self.cache[i] for i in sorted(self.cache, reverse=True)]   # pills first, nearest item last
+        for rank, el in enumerate(order):
             el.pending, el.t_switch = 0.0, now + rank * STAG_CLOSE / spd
         self.start_timer()
+
+    # ---- folders inside folders
+    def navigate(self, path):
+        """Open a sub-folder in place of this one: the fan folds away and unfolds the sub-folder."""
+        if not self.is_open:
+            return
+        self.stack.append((self.folder, self.target))
+        self.nav_to, self.restore = path, None
+        self.close_fan(nav=True)
+
+    def go_back(self):
+        if not self.is_open or not self.stack:
+            return
+        self.nav_to, self.restore = self.stack.pop()
+        self.close_fan(nav=True)
+
+    def enter(self):
+        path, self.nav_to = self.nav_to, None
+        self.folder = path
+        self.build(path, self.loc)
+        if self.restore is not None:                                # coming back: land where you left off
+            self.scroll = self.target = clamp(self.restore, 0.0, self.maxscroll)
+            self.restore = None
+            self.ensure_cache()
+        self.unfold()
 
     def hide_now(self):
         self.stop_all()
         self.is_open = False
         self.hide()
-        self.cache, self.header = {}, None
+        self.cache, self.header, self.back = {}, None, None
+        self.stack, self.nav_to = [], None
 
     def check_dismiss(self):
         if time.perf_counter() - self.t_open < 0.3:
             return
         if key_down(0x1B):                                          # Esc
             return self.close_fan()
+        bs = key_down(0x08)                                         # Backspace = back to the parent folder
+        if bs and not self._bs and self.stack:
+            self._bs = True
+            return self.go_back()
+        self._bs = bs
         if (key_down(0x01) or key_down(0x02)) and not self.region.contains(self.mapFromGlobal(QCursor.pos())):
             self.close_fan()                                        # click anywhere outside the fan
 
@@ -217,6 +266,9 @@ class FanOverlay(QWidget):
         if self.lift > 0.01:
             for el in list(self.cache.values()) + [self.header]:
                 el.slot = QPointF(el.slot.x(), el.slot.y() - self.lift)
+        if self.back is not None:
+            h = self.header
+            self.back.slot = QPointF(h.slot.x() - h.lw / 2 - self.back.lw / 2 - 12, h.slot.y())
 
     # ---- animation step (damped springs, dt-based so it stays smooth at any frame rate)
     def step(self):
@@ -255,7 +307,7 @@ class FanOverlay(QWidget):
             xm = self.origin.x() + self.bend * self.R * (1 - math.cos(sm / self.R))
             amp = S["magnify"] * math.exp(-((self.mouse.x() - xm) / 320.0) ** 2)
 
-        for el in list(self.cache.values()) + [self.header]:
+        for el in list(self.cache.values()) + self._bars():
             if el.t_switch is not None:
                 if now >= el.t_switch:
                     el.target, el.t_switch = el.pending, None
@@ -271,7 +323,7 @@ class FanOverlay(QWidget):
                 busy = True
             else:
                 el.x, el.v = el.target, 0.0
-            if el is self.header:
+            if el.kind in ("header", "back"):
                 t = 1.06 if self.hover is el else 1.0
             else:
                 d = (el.idx - f) * self.sp
@@ -293,7 +345,10 @@ class FanOverlay(QWidget):
             if self.res_on:
                 timer_resolution(False); self.res_on = False
             if not self.is_open:
-                self.hide_now()
+                if self.nav_to is not None:
+                    self.enter()                                    # unfold the sub-folder in the same place
+                else:
+                    self.hide_now()
 
     # ---- geometry / hit testing
     def cur_pos(self, el):
@@ -303,7 +358,7 @@ class FanOverlay(QWidget):
     def rects(self, el):
         pos = self.cur_pos(el)
         sc = (0.35 + 0.65 * clamp(el.x, 0.0, 1.1)) * el.hs * (0.78 + 0.22 * el.edge)
-        if el.kind == "header":
+        if el.kind in ("header", "back"):
             w, h = el.lw * sc, el.lh * sc
             return None, QRectF(pos.x() - w / 2, pos.y() - h / 2, w, h)
         s = self.isz * sc
@@ -314,7 +369,7 @@ class FanOverlay(QWidget):
     def hit(self, pt):
         if self.header is None:
             return None
-        cands = sorted(self.cache.values(), key=lambda q: q.hs) + [self.header]
+        cands = sorted(self.cache.values(), key=lambda q: q.hs) + self._bars()
         for el in reversed(cands):
             if el.x < 0.6 or el.edge < 0.35:
                 continue
@@ -332,7 +387,7 @@ class FanOverlay(QWidget):
         p.fillRect(e.rect(), QColor(0, 0, 0, 1))                    # alpha 1: invisible, but catches clicks
         if self.header is None:
             return
-        for el in sorted(self.cache.values(), key=lambda q: q.hs) + [self.header]:   # hovered item paints on top
+        for el in sorted(self.cache.values(), key=lambda q: q.hs) + self._bars():   # hovered item paints on top
             if el.x < 0.01 or el.edge < 0.01:
                 continue
             icon, lab = self.rects(el)
@@ -381,5 +436,9 @@ class FanOverlay(QWidget):
             return
         el = self.hit(e.position()) if e.button() == Qt.MouseButton.LeftButton else None
         if el is not None:
-            open_path(el.path)                                      # item or "Open in Explorer"
+            if el.kind == "back":
+                return self.go_back()
+            if el.kind == "item" and el.nav and S["subfolders"]:
+                return self.navigate(el.path)                       # dive into the folder, inside the fan
+            open_path(el.path)                                      # a file, or "Open in Explorer"
         self.close_fan()
