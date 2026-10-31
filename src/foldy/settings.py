@@ -6,7 +6,8 @@ RUNTIME = {"uninstalling": False}               # set while uninstalling so noth
 
 
 DEFAULTS = {"density": 1.0, "speed": 1.0, "glass": 0.9, "magnify": 0.45, "curve": 0.75,
-            "maxvis": 14, "sort": "newest", "labels": True, "natural": False, "subfolders": True, "autoupdate": True}
+            "maxvis": 14, "sort": "newest", "labels": True, "natural": False, "subfolders": True, "autoupdate": True,
+            "dropmode": "smart"}
 
 
 S = dict(DEFAULTS)                             # live settings
@@ -48,6 +49,11 @@ def log(msg):
     try:
         p = os.path.join(os.path.dirname(settings_file()), "foldy.log")
         os.makedirs(os.path.dirname(p), exist_ok=True)
+        try:
+            if os.path.getsize(p) > 400_000:                        # keep the last ~400 KB (plus one older copy), never more
+                os.replace(p, p + ".1")
+        except OSError:
+            pass
         with open(p, "a", encoding="utf-8") as f:
             f.write(time.strftime("%Y-%m-%d %H:%M:%S  ") + msg + "\n")
     except OSError:

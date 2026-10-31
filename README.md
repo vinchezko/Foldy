@@ -21,6 +21,9 @@ Pin any folder. Click it. Its contents spring out above the button along a smoot
 - **Spring-physics animation**, staggered per item, timed per frame so it stays smooth at any refresh rate.
 - **Fisheye hover** that pushes neighbours apart, so icons never collide.
 - **Kinetic scrolling** for big folders: momentum, rubber-band at the ends, edge fades.
+- **Drag files out of the fan.** Press on any file or folder in the fan and drag: drop it into a browser upload, a chat window, an editor or an Explorer window. A plain click still opens it. Dragging *copies* by default, so uploading something never removes the original (hold **Shift** to move).
+- **Drop files onto a stack.** Drag files from Explorer (or any app) and hold them over a pinned button: its fan opens. Drop on the fan to put them in that folder, or on a folder inside the fan to put them in that sub-folder. (Dropping straight onto the taskbar button also works wherever Windows allows it.) Foldy moves or copies them with Explorer's own progress dialog and name-clash handling. **Ctrl** copies, **Shift** moves; otherwise *Settings → Files dropped on a button* decides (**Smart** = move on the same drive, copy across drives, like Explorer).
+- **Spring-loaded folders and a drop placeholder.** While a file is being dragged over a fan, a blue **“↓ Drop in <folder>”** pill appears at the top: drop on it (or on empty fan space) to put the file in that folder. Rest the file on a folder for a moment and the fan opens it (the pill follows); rest it on the **◀ back** pill and it goes back up. You can also drag a file from the fan onto a folder in the same fan, or onto the back pill to move it up a level. Move the drag away from the fan and the fan closes. While you carry a file out of a fan, a round **✕** appears in the top-left corner of the screen: it grows into a “Cancel move” pill when you reach it, and dropping the file there cancels the move.
 - **Folders inside folders** (optional, on by default): click a folder in the fan and it unfolds in place, with a ◀ back pill. Toggle it in Settings.
 - **Fast.** Pinned buttons run a ~100 ms launcher; icons and labels are pre-loaded.
 - **Compact settings window** (density, speed, glass opacity, magnification, arc curve, item count, sorting…) with animated switches, a sliding sort control and a reset button on every slider.
@@ -46,6 +49,8 @@ Supported: Windows 10 / 11 (64-bit), taskbar at the bottom of the primary monito
 | Action | Result |
 |---|---|
 | Click an item | Opens it with its default app |
+| Drag an item out of the fan | Drops the real file where you let go (upload box, chat, editor, Explorer). The fan folds away afterwards |
+| Hold dragged files over a pinned button, then drop on the fan | Moves or copies them into that folder (**Ctrl** = copy, **Shift** = move; hold the key for a moment after you drop) |
 | Click **Open in Explorer ↗** (top of the arc) | Opens the folder |
 | Scroll wheel / touchpad | Scrolls long folders |
 | Click outside, `Esc`, or the button again | Closes the fan |
@@ -72,7 +77,7 @@ Run from source without building: `pip install PyQt6 pywin32`, then `python src\
 
 Build, then attach `dist\Foldy.exe` to a GitHub release. Keep the file name `Foldy.exe` so the website's download button and the in-app updater work.
 
-For updates to be offered, tag the release with a version **higher than the one users run** (`v1.1.0` → `v1.1.1`, `v1.2.0`…) and publish it as a normal release (not a draft or pre-release). Bump `VERSION` in `src/foldy/constants.py` and the two numbers in `packaging/version_info.txt` before building. People on v1.0.0 have no updater yet, so they install v1.1.0 once by hand.
+For updates to be offered, tag the release with a version **higher than the one users run** (`v1.2.0` → `v1.2.1`, `v1.3.0`…) and publish it as a normal release (not a draft or pre-release). Bump `VERSION` in `src/foldy/constants.py` and the two numbers in `packaging/version_info.txt` before building. People on v1.0.0 have no updater yet, so they install v1.1.0 or newer once by hand.
 
 The website's download counter adds up the `.exe` downloads of all releases (it includes updates downloaded by the app).
 
@@ -95,12 +100,13 @@ src/
     fan.py              fan overlay: arc layout, springs, magnification, scrolling
     render.py           cached icons, glass labels, folder listings
     winutil.py          Windows helpers: taskbar geometry, UI Automation, click tracker
+    dropzone.py         files dropped on a pinned button: move/copy decision and transfer
     shortcuts.py        shortcut icons, .lnk creation, taskbar pinning, folder picker
     updater.py          GitHub release check, verified download
     update_window.py    'Update now / Later' window and the drag-to-pin helper
     controls.py         animated switch and sliding segmented control
     settings.py, settings_window.py, installer.py, uninstaller.py, widgets.py, styles.py,
-    ipc.py, constants.py, util.py
+    dropzone.py, ipc.py, constants.py, util.py
   launcher/launcher.py  tiny stdlib-only launcher that pinned buttons run (built to fsl.exe)
 packaging/              PyInstaller specs, launcher packer, build.bat, version info
 assets/                 app icon (.png / .ico)
@@ -111,6 +117,8 @@ docs/                   the website (GitHub Pages)
 
 * Each pinned shortcut carries its own AppUserModelID, so Windows treats every folder as a separate taskbar button.
 * A click runs `fsl.exe`, which hands the click to the resident app over a named pipe. The app has been recording where the mouse button was released (a lightweight 250 Hz sampler that only runs fast while the pointer is near the bottom of the screen), then asks UI Automation for the exact button and the taskbar's real size.
+* Dropping files on a pinned button: Windows launches the shortcut's target with the dropped paths appended to its arguments. `fsl.exe` forwards them (plus the Ctrl/Shift state at that moment) to the resident app, which moves or copies them with the shell's file operation instead of opening the fan. Dropping onto taskbar buttons needs a Windows build that supports it (Windows 10, and Windows 11 22H2 with recent updates or newer).
+* Dragging out of the fan is a normal OLE file drag (`QDrag` with the file's URL), so any app that accepts dropped files accepts it.
 * The fan is a small click-through overlay window: it never takes focus, and clicks pass through to everything except the fan.
 
 ## License

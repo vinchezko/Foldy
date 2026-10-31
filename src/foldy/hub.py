@@ -4,30 +4,37 @@ from PyQt6.QtCore import QObject, QTimer, QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QIcon
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import QApplication, QFileDialog, QFileIconProvider, QMenu, QSystemTrayIcon
-from . import render, updater
+from . import dropzone, render, updater
 from .constants import APP, AUTHOR, DETACHED, GITHUB, INSTALL_DIR, PIPE, VERSION
+from .dragwatch import DragWatch
 from .fan import FanOverlay
 from .render import _label_cache, entries_for, glass_label, icon_pixmap
-from .settings import RUNTIME, S, load_settings, log, save_settings
+from .settings import RUNTIME, S, load_settings, log, save_settings, settings_file
 from .settings_window import SettingsWindow
 from .shortcuts import (folder_id, lnk_desc, make_icon, make_shortcut, migrate_shortcut, pick_folder,
                         pin_to_taskbar, warm_imports)
 from .uninstaller import UninstallConfirm, uninstall_steps
 from .update_window import UpdatePrompt
 from .widgets import StepWindow
-from .winutil import (asset, bring_to_front, data_dir, docs_path, locate_button, open_path, pinned_dir,
-                      set_autostart, start_click_tracker)
+from .winutil import (_BTN_CACHE, asset, bring_to_front, data_dir, docs_path, enum_taskbar_buttons, key_down, locate_button,
+                      open_path, pick_button, pinned_dir, set_autostart, start_click_tracker, taskbar_rect)
 
 
 class Bridge(QObject):
     done = pyqtSignal(str, str, bool, str)       # folder, shortcut, pinned?, error
     stacks = pyqtSignal(list)                    # folders of the pinned stacks
     checked = pyqtSignal(bool, dict, bool)       # update check finished: reached GitHub?, newest release, asked by the user?
+    dropped = pyqtSignal(str, str, int, str)     # files dropped on a button: verb, folder, how many were done, error
 
 
 class Hub:
     def __init__(self, server, first_run):
         self.overlay = FanOverlay()
+        self.overlay.on_drop = lambda dest, paths, mods: self.drop_files(dest, paths, mods)
+        self.drop_fan = FanOverlay()                                         # opens when a dragged file rests on a pinned button
+        self.drop_fan.drop_mode = True
+        self.drop_fan.on_drop = self.overlay.on_drop
+        self.overlay.on_note = self.drop_fan.on_note = lambda text: self.note(text)
         self.server, self.first_run = server, first_run
         self.settings_win, self.picking = None, False
         self.confirm_win = self.progress_win = None
@@ -35,6 +42,7 @@ class Hub:
         self.bridge.done.connect(self.on_done)
         self.bridge.stacks.connect(self.on_stacks)
         self.bridge.checked.connect(self.on_checked)
+        self.bridge.dropped.connect(self.on_dropped)
         self.update_info, self.update_prompt, self.update_win = None, None, None
         self._checking = False
         self._stacks, self._warm_queue = [], []
@@ -58,6 +66,7 @@ class Hub:
         m.addAction("Settings…", self.open_settings)
         m.addAction("Add folder & pin to taskbar…", self.add_folder)
         m.addAction("Open shortcuts folder", lambda: open_path(data_dir()))
+        m.addAction("Copy diagnostics", self.copy_diagnostics)
         m.addSeparator()
         m.addAction(f"by {AUTHOR}", lambda: QDesktopServices.openUrl(QUrl(GITHUB)))
         m.addAction("Quit Foldy", QApplication.quit)
@@ -70,6 +79,11 @@ class Hub:
         threading.Thread(target=warm_imports, daemon=True).start()
         threading.Thread(target=self._scan_stacks, daemon=True).start()
         threading.Thread(target=updater.cleanup_downloads, daemon=True).start()
+        self.seed_timer = QTimer(interval=15000)
+        self.seed_timer.timeout.connect(self.seed_buttons)
+        self.seed_timer.start()
+        QTimer.singleShot(5000, self.seed_buttons)
+        self.dragwatch = DragWatch(self)                                     # drag a file over a pinned button -> its fan opens
         self.update_timer = QTimer(interval=6 * 3600 * 1000)               # look for a new version every 6 hours
         self.update_timer.timeout.connect(self.auto_check)
         self.update_timer.start()
@@ -110,12 +124,93 @@ class Hub:
         f = msg.get("folder")
         if not f or not os.path.isdir(f):
             return
+        if msg.get("drop"):                                          # files were dropped onto this stack's taskbar button
+            return self.drop_files(f, msg["drop"], int(msg.get("mods") or 0))
         ov = self.overlay
+        if folder_id(f) not in self.stack_ids():                     # clicking its button proves it is a stack: drag-in must know it too
+            self._stacks.append(f)
+            log(f"stack learned from a click: {f}")
         if ov.is_open and ov.root == f:                              # pressing the button again closes it, even inside a sub-folder
             ov.close_fan()
         else:
             name = os.path.basename(f.rstrip("\\/")) or f
-            ov.open_fan(f, locate_button(msg.get("px"), msg.get("py"), "Foldy." + folder_id(f), name))
+            loc = locate_button(msg.get("px"), msg.get("py"), "Foldy." + folder_id(f), name)
+            log(f"open: {name}; button located exactly={loc.get('exact')}")
+            ov.open_fan(f, loc)
+
+    def copy_diagnostics(self):
+        """Put the end of foldy.log on the clipboard, ready to paste into a bug report."""
+        try:
+            with open(os.path.join(os.path.dirname(settings_file()), "foldy.log"), encoding="utf-8", errors="replace") as f:
+                text = "".join(f.readlines()[-80:])
+        except OSError:
+            text = "(no log yet)"
+        QApplication.clipboard().setText(f"Foldy {VERSION}\n" + text)
+        self.note("Diagnostics copied. Paste them into the chat.")
+
+    def seed_buttons(self):
+        """Remember where every Foldy button sits on the taskbar, so a dragged file reaching one opens its fan at once."""
+        try:
+            if not self._stacks or self.overlay.is_open or self.drop_fan.is_open or key_down(0x01):
+                return
+            tb = taskbar_rect()
+            if not tb or tb[1] < 100:
+                if not getattr(self, "_seed_warned", False):
+                    self._seed_warned = True
+                    log(f"seed: no bottom taskbar found ({tb})")
+                return
+            buttons = enum_taskbar_buttons(tb)
+            if not buttons:
+                if not getattr(self, "_seed_warned2", False):
+                    self._seed_warned2 = True
+                    log("seed: UI Automation returned no taskbar buttons")
+                return
+            n = 0
+            for fid, f in self.stack_ids().items():
+                r = pick_button(buttons, "Foldy." + fid, os.path.basename(f.rstrip("\\/")).lower())
+                if r:
+                    _BTN_CACHE["foldy." + fid] = r
+                    n += 1
+            if not getattr(self, "_seed_logged", False):
+                self._seed_logged = True
+                log(f"seed: found {n} of {len(self._stacks)} Foldy buttons on the taskbar")
+        except Exception:
+            log(traceback.format_exc())
+
+    def stack_ids(self):
+        return {folder_id(f): f for f in self._stacks}
+
+    # ---- files dropped onto a pinned button: move or copy them into that folder
+    def drop_files(self, folder, files, mods):
+        files = [p for p in files if isinstance(p, str) and os.path.exists(p)]
+        if not files:
+            return
+        verb = dropzone.choose_verb(files, folder, S["dropmode"], mods)
+        items = dropzone.usable(files, folder, verb)
+        if not items:
+            name = os.path.basename(folder.rstrip("\\/")) or folder
+            return self.note(f"Already in “{name}”. Hold Ctrl to copy a duplicate.")
+        threading.Thread(target=self._drop_worker, args=(folder, items, verb), daemon=True).start()
+
+    def _drop_worker(self, folder, items, verb):
+        done, err = 0, ""
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+            try:
+                done, err = dropzone.transfer(items, folder, verb)
+            finally:
+                pythoncom.CoUninitialize()
+        except Exception:
+            log(traceback.format_exc())
+            err = traceback.format_exc().strip().splitlines()[-1]
+        self.bridge.dropped.emit(verb, folder, done, err)
+
+    def on_dropped(self, verb, folder, done, err):
+        render._entries_cache.pop(folder, None)                      # the folder changed: its fan must be listed again
+        self.warm_timer.start()
+        if done or err:
+            self.note(dropzone.describe(verb, done, folder, err))
 
     # ---- settings
     def on_tray(self, reason):
@@ -141,6 +236,7 @@ class Hub:
     def settings_changed(self):
         _label_cache.clear()
         self.overlay.hide_now()
+        self.drop_fan.hide_now()
         self.save_timer.start()
         self.warm_timer.start()
 
@@ -290,6 +386,7 @@ class Hub:
         RUNTIME["uninstalling"] = True                                         # from now on nothing may write settings/logs again
         self.save_timer.stop()
         self.overlay.hide_now()
+        self.drop_fan.hide_now()
         self.tray.hide()
         self.server.close()
         if self.settings_win is not None:
@@ -347,7 +444,7 @@ class Hub:
             self._stacks.append(d); self.warm_timer.start()
         elif lnk:
             subprocess.Popen(["explorer", "/select,", lnk])
-            msg = "Windows blocked auto-pin. Right-click the selected shortcut → Show more options → Pin to taskbar."
+            msg = "Windows doesn't allow apps to pin automatically any more. Drag the selected shortcut onto your taskbar (or right-click it → Show more options → Pin to taskbar)."
         else:
             msg = f"Couldn't add “{name}”: {err or 'unknown error'} (details: %APPDATA%\\Foldy\\foldy.log)"
         self.status(msg)
@@ -355,6 +452,10 @@ class Hub:
 
 
 def run(msg):
+    def _hook(et, ev, tb):                                        # PyQt aborts the whole process on an unhandled error in a slot/event:
+        log("".join(traceback.format_exception(et, ev, tb)))      # log it instead, so one bug never takes Foldy down
+    sys.excepthook = _hook
+    log(f"Foldy {VERSION} starting (build: v1.2.0)")
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)                             # tray app: closing settings must not quit
     app.setApplicationName(APP)

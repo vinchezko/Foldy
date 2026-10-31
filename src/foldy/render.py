@@ -62,6 +62,42 @@ def glass_label(text, dpr):
     return _label_cache[key]
 
 
+def accent_label(text, dpr, hot=False):
+    """The blue overlay that floods a drop target (same shape and size as glass_label). Only ever drawn on top of the
+    normal glass pill, while a carried file is held over it."""
+    key = ("accent", text, dpr, hot)
+    hit = _label_cache.get(key)
+    if hit:
+        return hit
+    font = ui_font(12)
+    fm = QFontMetrics(font)
+    t = fm.elidedText(text, Qt.TextElideMode.ElideMiddle, 240)
+    w, h, m = fm.horizontalAdvance(t) + 24, 24, 12
+    pm = QPixmap(int((w + 2 * m) * dpr), int((h + 2 * m) * dpr))
+    pm.setDevicePixelRatio(dpr); pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    for k in range(0, m - 3, 2):
+        p.setBrush(QColor(20, 60, 140, int(18 * (1 - k / m) + 2)))
+        p.drawRoundedRect(QRectF(m - k, m - k + 2, w + 2 * k, h + 2 * k), 8 + k, 8 + k)
+    body = QRectF(m, m, w, h)
+    g = QLinearGradient(0, m, 0, m + h)
+    if hot:
+        g.setColorAt(0, QColor(92, 160, 255, 250)); g.setColorAt(1, QColor(52, 112, 226, 250))
+    else:
+        g.setColorAt(0, QColor(64, 118, 214, 236)); g.setColorAt(1, QColor(38, 78, 164, 240))
+    p.setBrush(g); p.setPen(QPen(QColor(170, 210, 255, 235 if hot else 170), 1.5))
+    p.drawRoundedRect(body.adjusted(.75, .75, -.75, -.75), 8, 8)
+    p.setFont(font); p.setPen(QColor(255, 255, 255))
+    p.drawText(body, Qt.AlignmentFlag.AlignCenter, t)
+    p.end()
+    if len(_label_cache) > 400:
+        _label_cache.clear()
+    _label_cache[key] = (pm, w, h, m)
+    return _label_cache[key]
+
+
 def list_entries(folder, sort):
     out = []
     try:
@@ -112,9 +148,16 @@ class Elt:
     def __init__(self, kind, path, name, dpr, is_dir=False, idx=-1):
         self.kind, self.path, self.idx = kind, path, idx
         self.label, self.lw, self.lh, self.lm = glass_label(name, dpr)
-        self.icon = None if kind in ("header", "back") else icon_pixmap(path, is_dir)
+        self.name, self.dpr, self.fillk, self._hot = name, dpr, 0.0, None      # fillk: 0..1, how much of the pill the drop-blue has covered
+        self.icon = None if kind in ("header", "back", "drop") else icon_pixmap(path, is_dir)
         self.nav = False                                            # a folder that can be opened inside the fan
         self.x = self.v = self.target = self.pending = 0.0          # spring state (open progress 0..1)
         self.t_switch = None
         self.hs, self.edge, self.slot = 1.0, 1.0, QPointF()        # hover scale, edge fade, layout position
-        self.lv = 1.0 if (kind in ("header", "back") or S["labels"]) else 0.0  # label visibility (smoothed)
+        self.lv = 1.0 if (kind in ("header", "back", "drop") or S["labels"]) else 0.0  # label visibility (smoothed)
+
+    def hot(self):
+        """The same pill in full drop-blue (built on first use)."""
+        if self._hot is None:
+            self._hot = accent_label(self.name, self.dpr, True)[0]
+        return self._hot

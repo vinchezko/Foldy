@@ -148,6 +148,8 @@ def pick_folder():
     try:
         import pythoncom
         from win32com.shell import shell, shellcon
+        if not (hasattr(shell, "CLSID_FileOpenDialog") and hasattr(shell, "IID_IFileOpenDialog")):
+            return "", "this pywin32 has no IFileOpenDialog (Qt's own folder dialog is used instead; harmless)"
         owner = QWidget(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         c = QApplication.primaryScreen().geometry().center()
         owner.setGeometry(c.x(), c.y(), 1, 1)

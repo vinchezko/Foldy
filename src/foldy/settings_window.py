@@ -22,6 +22,8 @@ SLIDERS = [                                    # key, label, min, max, scale, va
 
 SORTS = [("newest", "Newest"), ("name", "A–Z"), ("folders", "Folders first")]
 
+DROPS = [("smart", "Smart"), ("move", "Move"), ("copy", "Copy")]
+
 
 class ToggleRow(QWidget):
     """Title + small hint on the left, a switch on the right. Clicking anywhere on the row flips the switch."""
@@ -63,17 +65,19 @@ class SettingsWindow(QWidget):
         logo = QLabel()
         logo.setPixmap(QPixmap(asset("foldy.png")).scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio,
                                                            Qt.TransformationMode.SmoothTransformation))
-        titles = QVBoxLayout(); titles.setSpacing(0)
+        logo.setFixedSize(40, 40)                                   # the label must not grow wider than the icon
+        titles = QVBoxLayout(); titles.setSpacing(0); titles.setAlignment(Qt.AlignmentFlag.AlignLeft)
         t = QLabel("Foldy"); t.setObjectName("title")
         self.status = QLabel("Fan stacks for your taskbar"); self.status.setObjectName("sub")
         self.status.setWordWrap(True); self.status.setMaximumWidth(400)
+        t.setAlignment(Qt.AlignmentFlag.AlignLeft); self.status.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         titles.addWidget(t); titles.addWidget(self.status)
         right = QVBoxLayout(); right.setSpacing(3)
         pill = QLabel(f"v{VERSION}"); pill.setObjectName("pill")
         by = QLabel(f'by <a style="color:#4cc9ff;text-decoration:none" href="{GITHUB}">{AUTHOR}</a>')
         by.setObjectName("foot"); by.setOpenExternalLinks(True)
         right.addWidget(pill, alignment=Qt.AlignmentFlag.AlignRight); right.addWidget(by, alignment=Qt.AlignmentFlag.AlignRight)
-        head.addWidget(logo); head.addLayout(titles, 1); head.addLayout(right)
+        head.addWidget(logo, 0, Qt.AlignmentFlag.AlignTop); head.addLayout(titles, 1); head.addLayout(right)
         root.addLayout(head)
 
         # ---- appearance
@@ -106,6 +110,15 @@ class SettingsWindow(QWidget):
         self.sort.changed.connect(lambda k: self.on_set("sort", k))
         sort_row.addLayout(lbl, 1); sort_row.addWidget(self.sort)
         lay.addLayout(sort_row)
+        drop_row = QHBoxLayout(); drop_row.setSpacing(10)
+        lbl = QVBoxLayout(); lbl.setSpacing(0)
+        dl = QLabel("Files dropped on a button")
+        dh = QLabel("Onto a pinned button · Ctrl copies, Shift moves"); dh.setObjectName("hint")
+        lbl.addWidget(dl); lbl.addWidget(dh)
+        self.drop = Segmented(DROPS)
+        self.drop.changed.connect(lambda k: self.on_set("dropmode", k))
+        drop_row.addLayout(lbl, 1); drop_row.addWidget(self.drop)
+        lay.addLayout(drop_row)
         sep = QFrame(); sep.setObjectName("sep"); sep.setFrameShape(QFrame.Shape.HLine)
         lay.addWidget(sep)
         opts = QGridLayout(); opts.setHorizontalSpacing(26); opts.setVerticalSpacing(10)
@@ -169,6 +182,7 @@ class SettingsWindow(QWidget):
             self.vals[key].setText(fmt(sl.value()))
             self.resets[key].setEnabled(sl.value() != int(round(DEFAULTS[key] * scale)))
         self.sort.set_value(S["sort"], animate=False)
+        self.drop.set_value(S["dropmode"], animate=False)
         for row, v in ((self.r_labels, S["labels"]), (self.r_natural, S["natural"]), (self.r_sub, S["subfolders"]),
                        (self.r_auto, autostart_enabled()), (self.r_update, S["autoupdate"])):
             row.toggle.set_value(v)

@@ -101,6 +101,26 @@ def pin_topmost(widget):
     f(wintypes.HWND(int(widget.winId())), wintypes.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)
 
 
+def set_click_through(widget, on):
+    """Let the mouse (and drag-and-drop hit-testing) pass straight through a window that is still painted.
+    Used while a file is being carried out of the fan, so the fan never sits between the file and its target."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        u.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+        u.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+        u.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+        hwnd = ctypes.c_void_p(int(widget.winId()))
+        st = u.GetWindowLongPtrW(hwnd, -20)                          # GWL_EXSTYLE
+        st = (st | 0x20) if on else (st & ~0x20)                     # WS_EX_TRANSPARENT
+        u.SetWindowLongPtrW(hwnd, -20, st)
+    except Exception:
+        pass
+
+
 def bring_to_front(widget):
     """Really put a window in front and give it keyboard focus. Windows refuses a plain activateWindow() from a tray app
     (the button just flashes), which is why a tray click sometimes seemed to need a second try."""
@@ -242,6 +262,39 @@ def uia_button_rect(px, py, tb):
             return None
         finally:
             _vcall(el, 2, ctypes.c_ulong, [])                         # Release
+    except Exception:
+        return None
+
+
+def uia_button_at(px, py, tb):
+    """The taskbar button under a point as {aid, name, rect} (physical px), or None. One ElementFromPoint call: cheap
+    enough to use while a file is being dragged, and the same route that locates a clicked button."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        uia = _uia_instance()
+        if not uia:
+            return None
+        el = ctypes.c_void_p()
+        if _vcall(uia, 7, ctypes.c_long, [wintypes.POINT, ctypes.POINTER(ctypes.c_void_p)],
+                  wintypes.POINT(int(px), int(py)), ctypes.byref(el)) != 0 or not el.value:
+            return None
+        try:
+            pid, tray_pid = ctypes.c_int(), wintypes.DWORD()
+            if _vcall(el, 20, ctypes.c_long, [ctypes.POINTER(ctypes.c_int)], ctypes.byref(pid)) != 0:
+                return None
+            ctypes.windll.user32.GetWindowThreadProcessId(ctypes.c_void_p(tb[4]), ctypes.byref(tray_pid))
+            if pid.value != tray_pid.value:
+                return None
+            r = wintypes.RECT()
+            if _vcall(el, 43, ctypes.c_long, [ctypes.POINTER(wintypes.RECT)], ctypes.byref(r)) != 0:
+                return None
+            w, h = r.right - r.left, r.bottom - r.top
+            if not (16 <= w <= 220 and 16 <= h <= 220):
+                return None
+            return {"aid": _bstr(el, 29).lower(), "name": _bstr(el, 23).lower(), "rect": (r.left, r.top, r.right, r.bottom)}
+        finally:
+            _vcall(el, 2, ctypes.c_ulong, [])
     except Exception:
         return None
 
@@ -410,6 +463,9 @@ def locate_button(px, py, aumid=None, name=None):
             r = uia_button_rect(px, py, tb)                          # last resort: the button under the pointer
         if r:
             loc.update(cx=(r[0] + r[2]) / 2 / dpr, cy=(r[1] + r[3]) / 2 / dpr, exact=True)
+        elif click and aumid:                                        # UI Automation failed: the clicked spot still tells where the button is
+            half = max(24, (tb[3] - tb[1]) // 2 - 4)
+            _BTN_CACHE[aumid.lower()] = (int(px) - half, tb[1], int(px) + half, tb[3])
     return loc
 
 
@@ -485,3 +541,29 @@ TRACKER = ClickTracker()
 def start_click_tracker():
     if sys.platform == "win32" and not TRACKER.is_alive():
         TRACKER.start()
+
+
+def window_at_cursor():
+    """One line describing the window under the pointer (for the log: where did a dragged file end up?)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u = ctypes.windll.user32
+        u.WindowFromPoint.restype = ctypes.c_void_p
+        u.WindowFromPoint.argtypes = [wintypes.POINT]
+        u.GetAncestor.restype = ctypes.c_void_p
+        u.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        u.GetClassNameW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+        u.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+        u.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD)]
+        pt = wintypes.POINT()
+        u.GetCursorPos(ctypes.byref(pt))
+        h = u.WindowFromPoint(pt)
+        if not h:
+            return f"{pt.x},{pt.y}: no window"
+        top = u.GetAncestor(h, 2) or h
+        cls, title, pid = ctypes.create_unicode_buffer(128), ctypes.create_unicode_buffer(128), wintypes.DWORD()
+        u.GetClassNameW(top, cls, 128); u.GetWindowTextW(top, title, 128); u.GetWindowThreadProcessId(top, ctypes.byref(pid))
+        return f"{pt.x},{pt.y}: class={cls.value!r} title={title.value!r} pid={pid.value} (ours={pid.value == os.getpid()})"
+    except Exception as ex:
+        return f"(unknown: {ex!r})"

@@ -6,11 +6,13 @@ hands the click to the already-running app. This module decides what a launch of
   Foldy.exe                    install (first run from a downloaded copy) / open settings
   Foldy.exe --hub              start hidden (used by "Start with Windows")
   Foldy.exe --folder "C:\\x"   toggle the fan for that folder (used when the launcher has to start the app)
+  Foldy.exe --folder "C:\\x" "C:\\f.txt"   move/copy the dropped file(s) into that folder
   Foldy.exe --uninstall        open the uninstall confirmation (used by Windows "Apps & features")
 """
 import os, subprocess, sys
 
 from .constants import DETACHED, INSTALL_DIR, INSTALL_EXE
+from .dropzone import drop_args
 from .ipc import send_to_hub
 
 
@@ -49,6 +51,9 @@ def main():
     folder = args[args.index("--folder") + 1] if "--folder" in args else None
     if folder:
         msg = {"folder": folder, "px": px, "py": py}
+        files, mods = drop_args(args)                             # files dropped onto the pinned button
+        if files:
+            msg.update(drop=files, mods=mods)
     elif "--uninstall" in args:
         msg = {"cmd": "uninstall"}
     elif "--hub" in args:
