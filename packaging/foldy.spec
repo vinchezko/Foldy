@@ -13,8 +13,8 @@ def p(*parts):
 LAUNCHER_ZIP = p("build", "launcher.zip")                      # made by packaging/pack_launcher.py
 DROP_BINARIES = ("opengl32sw", "d3dcompiler", "qt6pdf", "qt6svg", "qt6quick", "qt6qml",
                  "qsvg", "qpdf", "qtiff", "qwebp", "qgif", "qicns", "qtga", "qwbmp")
-APP_MODULES = ["app", "constants", "fan", "hub", "installer", "ipc", "render", "settings", "settings_window",
-               "shortcuts", "styles", "uninstaller", "util", "widgets", "winutil"]
+APP_MODULES = ["app", "constants", "fan", "ctxmenu", "hub", "installer", "ipc", "keyhook", "render", "settings", "settings_window", "smartdialog",
+               "shortcuts", "styles", "thumbs", "uninstaller", "util", "widgets", "winutil"]
 
 a = Analysis(
     [p("src", "run_foldy.py")],

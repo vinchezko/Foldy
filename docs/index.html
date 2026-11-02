@@ -93,14 +93,50 @@
   <div class="wrap">
     <p class="eyebrow reveal">What it does</p>
     <h2 class="reveal">A better way to reach the folders you use every day.</h2>
+
+    <div class="sub-head reveal"><span class="badge">New in 1.3</span><h3>Find it, pick it, open it. Without the mouse.</h3></div>
+    <div class="spot">
+      <article class="spot-card reveal" id="spot-filter">
+        <div class="spot-copy"><h3>Type to filter</h3><p>Open a big folder and just start typing. A search pill appears above <i>Open in Explorer</i> and the fan narrows to the names that match, best matches nearest the taskbar. <kbd>Enter</kbd> opens the top one.</p></div>
+        <div class="mini-filter" aria-label="Type to filter demo">
+          <div class="mf-pill"><span class="mf-ic">⌕</span><input id="mf-input" type="text" value="re" spellcheck="false" autocomplete="off" aria-label="Try typing a filter"><span class="mf-hint">try typing</span></div>
+          <ul id="mf-list"></ul>
+        </div>
+      </article>
+
+      <article class="spot-card reveal">
+        <div class="spot-copy"><h3>Real thumbnails</h3><p>Pictures, videos and PDFs show what they actually look like instead of a generic icon. They load in the background, fade in, and follow the file when you drag it out.</p></div>
+        <div class="mini-thumbs" aria-hidden="true">
+          <div class="th th-a"></div><div class="th th-b"></div><div class="th th-c"><i></i></div><div class="th th-d"><b>PDF</b></div><div class="th th-e"></div>
+        </div>
+      </article>
+
+      <article class="spot-card reveal">
+        <div class="spot-copy"><h3>Smart stacks</h3><p>A stack doesn't have to be one folder. Make <i>Recent files</i>, <i>Newest 20 downloads</i> or <i>Recent pictures</i>, or mix places, file types and ages yourself. It pins like any other stack and keeps itself fresh.</p></div>
+        <div class="mini-smart" aria-hidden="true">
+          <span class="chip on">⏱ Recent files</span><span class="chip">⬇ Newest 20 downloads</span><span class="chip">🖼 Recent pictures</span>
+          <span class="chip dashed">＋ Your own rule</span>
+        </div>
+      </article>
+
+      <article class="spot-card reveal">
+        <div class="spot-copy"><h3>Keyboard &amp; right-click</h3><p>Arrow through the fan, open, dive into folders and go back, all from the keyboard. Right-click any item for a glass menu with its picture, size and date, plus the actions you reach for most.</p></div>
+        <div class="mini-keys" aria-hidden="true">
+          <div class="keys"><kbd>↑</kbd><kbd>↓</kbd><span>move</span><kbd>Enter</kbd><span>open</span><kbd>→</kbd><span>into folder</span><kbd>←</kbd><span>back</span></div>
+          <div class="menu"><b>Open</b><b>Open with…</b><hr><b>Show in Explorer</b><b>Copy path</b></div>
+        </div>
+      </article>
+    </div>
+
+    <div class="sub-head reveal"><h3>The basics, done properly</h3></div>
     <div class="grid">
       <article class="card reveal"><div class="card-ic">📌</div><h3>Pin as many as you like</h3><p>Every folder becomes its own real taskbar button with its own coloured icon. No background clutter, no extra bars.</p></article>
-      <article class="card reveal"><div class="card-ic">🎯</div><h3>Opens exactly above the button</h3><p>Foldy remembers where you clicked and asks Windows for that button's real position, so the fan lands right on top of it, even if you flick the mouse away. It works with <kbd>Win</kbd>+<kbd>1</kbd>…<kbd>9</kbd> too.</p></article>
-      <article class="card reveal"><div class="card-ic">🌀</div><h3>Spring-physics animation</h3><p>Items fan out one after another with a little overshoot, and fold back the same way. Runs at your display's full refresh rate.</p></article>
+      <article class="card reveal"><div class="card-ic">🎯</div><h3>Opens exactly above the button</h3><p>Foldy asks Windows for the button's real position, so the fan lands right on top of it. Works with <kbd>Win</kbd>+<kbd>1</kbd>…<kbd>9</kbd> too.</p></article>
+      <article class="card reveal"><div class="card-ic">🌀</div><h3>Spring-physics animation</h3><p>Items fan out one after another with a little overshoot, and fold back the same way, at your display's full refresh rate.</p></article>
       <article class="card reveal"><div class="card-ic">🔍</div><h3>Fisheye hover</h3><p>Icons magnify under your pointer and gently push their neighbours aside, so nothing ever overlaps.</p></article>
-      <article class="card reveal"><div class="card-ic">🧈</div><h3>Buttery scrolling</h3><p>Big folders scroll with momentum and a soft rubber-band at both ends, with items fading in and out at the edges.</p></article>
-      <article class="card reveal"><div class="card-ic">🧲</div><h3>Drag files out of the fan</h3><p>Grab any file from your Downloads stack and drop it straight into a browser upload, a chat or an editor. It's a real drag, so it works anywhere a file can be dropped.</p></article>
-      <article class="card reveal"><div class="card-ic">📥</div><h3>Drop files onto a button</h3><p>Drop files onto a pinned button to move or copy them into that folder. <kbd>Ctrl</kbd> copies, <kbd>Shift</kbd> moves. Your stacks start to feel like real places.</p></article>
+      <article class="card reveal"><div class="card-ic">🧈</div><h3>Buttery scrolling</h3><p>Big folders scroll with momentum and a soft rubber-band at both ends, with items fading at the edges.</p></article>
+      <article class="card reveal"><div class="card-ic">🧲</div><h3>Drag files out of the fan</h3><p>Grab a file and drop it into a browser upload, a chat or an editor. It's a real drag, so it works anywhere.</p></article>
+      <article class="card reveal"><div class="card-ic">📥</div><h3>Drop files onto a button</h3><p>Drop files on a pinned button to move or copy them in. <kbd>Ctrl</kbd> copies, <kbd>Shift</kbd> moves.</p></article>
       <article class="card reveal"><div class="card-ic">⚡</div><h3>Light and instant</h3><p>A tiny launcher starts in about 100&nbsp;ms. Icons and labels are pre-loaded. No network, no telemetry.</p></article>
     </div>
   </div>
@@ -135,19 +171,23 @@
           <div class="win-head">
             <img src="assets/foldy.png" alt="" width="34" height="34">
             <div><b>Foldy</b><small>Fan stacks for your taskbar</small></div>
-            <span class="by">v1.2.0 · by <a href="https://github.com/vinchezko" data-owner>vinchezko</a></span>
+            <span class="by">v1.3.5 · by <a href="https://github.com/vinchezko" data-owner>vinchezko</a></span>
           </div>
           <div class="sliders" id="sliders"></div>
           <div class="opts">
             <label>Sort by <select id="o-sort"><option>Newest first</option><option>Name (A–Z)</option><option>Folders first</option></select></label>
+            <p class="note" id="o-sort-note">Newest first: what changed last sits right next to the taskbar.</p>
             <label class="chk"><input type="checkbox" id="o-auto" checked> Start with Windows</label>
             <label class="chk"><input type="checkbox" id="o-labels" checked> Always show names</label>
             <label class="chk"><input type="checkbox" id="o-nat"> Natural scrolling</label>
+            <label class="chk"><input type="checkbox" id="o-thumbs" checked> Real thumbnails</label>
+            <label class="chk"><input type="checkbox" id="o-type" checked> Type to filter</label>
             <label class="chk wide"><input type="checkbox" id="o-sub" checked> Open sub-folders inside the fan (with a back button)</label>
           </div>
           <div class="win-actions">
             <button class="wbtn accent" id="b-preview">Preview fan</button>
             <button class="wbtn" id="b-add">Add folder…</button>
+            <button class="wbtn" id="b-smart">Smart stack…</button>
             <span class="grow"></span>
             <button class="wbtn" id="b-reset">Reset all</button>
             <button class="wbtn danger" id="b-uninstall"><svg width="14" height="14"><use href="#i-trash"/></svg> Uninstall</button>
@@ -240,6 +280,9 @@
       <details><summary>Does it send anything over the internet?</summary><p>No. Foldy makes no network connections, has no telemetry and no account. Everything stays on your PC.</p></details>
       <details><summary>Why does Windows say "Windows protected your PC"?</summary><p>Foldy is a new, unsigned program, so SmartScreen is cautious about it. Click <b>More info</b>, then <b>Run anyway</b>. The full source code is on GitHub if you want to check it or build it yourself.</p></details>
       <details><summary>Will it touch my files?</summary><p>No. It only reads folder listings to draw the fan. Uninstalling removes Foldy's own shortcuts, settings and program files and never anything of yours.</p></details>
+      <details><summary>How do I search a big folder?</summary><p>Open its fan and start typing. The fan narrows to matching names and <kbd>Enter</kbd> opens the best match. <kbd>Esc</kbd> clears the search first; press it again to close the fan. You can turn this off in Settings.</p></details>
+      <details><summary>Do I get thumbnails for PDFs and videos?</summary><p>Yes, the same previews Explorer shows. Videos need Windows to be able to decode them, and PDFs need a PDF preview handler (Microsoft Edge and Adobe Acrobat both provide one). Files without a preview keep their normal icon.</p></details>
+      <details><summary>What is a smart stack?</summary><p>A stack filled by a rule instead of one folder: for example the files you opened recently, or the 20 newest things in Downloads. Add one from the tray icon or from Settings → <b>Smart stack…</b> and it pins to the taskbar like any other.</p></details>
       <details><summary>Can I change how it looks and feels?</summary><p>Yes: density, animation speed, glass opacity, magnification, arc curve, number of items, sorting and more, each with its own reset button.</p></details>
     </div>
   </div>

@@ -2,7 +2,7 @@
 import os
 
 
-APP, VERSION = "Foldy", "1.2.0"
+APP, VERSION = "Foldy", "1.3.5"
 
 
 AUTHOR, GITHUB = "vinchezko", "https://github.com/vinchezko"

@@ -7,7 +7,7 @@ RUNTIME = {"uninstalling": False}               # set while uninstalling so noth
 
 DEFAULTS = {"density": 1.0, "speed": 1.0, "glass": 0.9, "magnify": 0.45, "curve": 0.75,
             "maxvis": 14, "sort": "newest", "labels": True, "natural": False, "subfolders": True, "autoupdate": True,
-            "dropmode": "smart"}
+            "dropmode": "smart", "thumbs": True, "typefilter": True}
 
 
 S = dict(DEFAULTS)                             # live settings

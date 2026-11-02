@@ -8,8 +8,10 @@ from .constants import (BASE_ICON, BASE_SP, C_CLOSE, C_OPEN, K, SCROLL_C, SCROLL
                         WIN_W)
 from . import dropzone
 from . import render
+from . import ctxmenu, thumbs
 from .cancel_corner import corner
-from .render import Elt, entries_for, glass_label
+from .keyhook import KeyHook
+from .render import BAR_KINDS, Elt, entries_for, filter_entries, glass_label, real_folder
 from .settings import S, log
 from .util import clamp, smooth
 from .winutil import key_down, open_path, pin_topmost, set_click_through, timer_resolution, window_at_cursor
@@ -31,6 +33,10 @@ class FanOverlay(QWidget):
         self.on_drop = None                                         # hub callback: (folder, paths, mods)
         self.drop_mode = False                                      # this overlay only exists to take drops (see dragwatch)
         self.entries, self.cache, self.header = [], {}, None
+        self.reuse, self.fresh, self.n_new = {}, None, 0             # filter refresh: items to keep, when new ones start, how many are new
+        self.all_entries, self.query, self.applied = [], "", ""      # type-to-filter: the whole folder, what was typed, what is shown
+        self.searchbar, self.keys, self.kick, self.t_eat = None, None, False, 0.0   # its pill, the keyboard hook, a pending refresh, last key we took
+        self.kb, self.menu, self.t_menu, self.last_pt = None, None, 0.0, QPointF()   # keyboard selection, right-click menu, when it closed, last pointer position
         self.folder, self.is_open = None, False
         self.root, self.loc, self.back = None, {}, None              # pinned folder, where it opened, the 'back' pill
         self.stack, self.nav_to, self.restore = [], None, None       # folders-in-folders: ancestors, target, scroll to restore
@@ -60,6 +66,7 @@ class FanOverlay(QWidget):
         self.drag_timer = QTimer(self, interval=30)                 # drives hover + spring-loaded folders during a drag
         self.drag_timer.timeout.connect(self.drag_tick)
         self.winId()                                                # create the native window up-front
+        thumbs.get().ready.connect(self.on_thumb)                   # real thumbnails arrive from a background thread
 
     # ---- build
     def build(self, folder, loc):
@@ -95,7 +102,9 @@ class FanOverlay(QWidget):
             self.bend = 1
         self.label_side = 1 if self.origin.x() < 300 else -1
 
-        self.entries = entries_for(folder, S["sort"])
+        self.all_entries = self.entries = entries_for(folder, S["sort"])
+        self.query = self.applied = ""
+        self.searchbar, self.kb = None, None
         self.maxscroll = float(max(0, len(self.entries) - self.cap))
         self.scroll = self.sv = self.target = 0.0
         self.cache = {}
@@ -124,11 +133,20 @@ class FanOverlay(QWidget):
         hi = min(len(self.entries) - 1, int(math.ceil(self.scroll)) + self.cap)
         for i in range(lo, hi + 1):
             if i not in self.cache:
-                _, name, path, isd = self.entries[i]
-                el = Elt("item", path, name, self.dpr, isd, i)
-                el.nav = bool(isd) and path != self.folder
-                if self.is_open:                                    # scrolled in after the open animation
-                    el.x = el.target = el.pending = 1.0
+                mt, name, path, isd = self.entries[i]
+                el = self.reuse.pop(path, None)                     # a filter keeps the items that are still shown
+                if el is not None:
+                    el.idx = i
+                else:
+                    el = Elt("item", path, name, self.dpr, isd, i, mt)
+                    el.nav = bool(isd) and path != self.folder
+                    el.dummy = path == self.folder
+                    if self.is_open and self.fresh is not None:     # filtered in: springs out of the button like on open
+                        el.x = el.v = el.target = 0.0
+                        el.pending, el.t_switch = 1.0, self.fresh + min(self.n_new, self.cap) * STAG_OPEN / max(S["speed"], 0.1)
+                        self.n_new += 1
+                    elif self.is_open:                              # scrolled in after the open animation
+                        el.x = el.target = el.pending = 1.0
                 self.cache[i] = el
         for i in [k for k in self.cache if k < lo - 2 or k > hi + 2]:
             del self.cache[i]
@@ -137,7 +155,8 @@ class FanOverlay(QWidget):
     def _bars(self):
         """The pill-shaped elements at the top of the arc: 'Open in Explorer', 'back' (inside a sub-folder) and, while a
         file is being dragged, the 'drop here' placeholder."""
-        return [self.header] + ([self.back] if self.back is not None else []) + ([self.dropbar] if self.dropbar is not None else [])
+        return ([self.header] + ([self.back] if self.back is not None else []) + ([self.dropbar] if self.dropbar is not None else [])
+                + ([self.searchbar] if self.searchbar is not None else []))
 
     def drop_text(self, folder):
         return "↓  Drop in  " + (os.path.basename(folder.rstrip("\\/")) or folder)
@@ -174,6 +193,10 @@ class FanOverlay(QWidget):
             el.pending, el.t_switch = 1.0, now + (2 + k) * STAG_OPEN / spd
         self.poll.start()
         self.start_timer()
+        if not self.drop_mode and S["typefilter"] and not self.keys_active():
+            if self.keys is None:
+                self.keys = KeyHook(self.on_key, self.listening)
+            self.keys.install()
 
     def close_fan(self, nav=False):
         if not nav:
@@ -219,6 +242,11 @@ class FanOverlay(QWidget):
         self.is_open = False
         self.hide()
         self.cache, self.header, self.back, self.dropbar = {}, None, None, None
+        self.searchbar, self.query, self.applied, self.all_entries, self.kb = None, "", "", [], None
+        if self.menu is not None:
+            self.menu.close()
+        if self.keys is not None:
+            self.keys.remove()
         self.stack, self.nav_to = [], None
         if self.idrag is not None:
             log("idrag: ended because the fan was hidden")
@@ -239,11 +267,14 @@ class FanOverlay(QWidget):
             if self.idrag_up >= 3:                                  # released somewhere we never heard about (3 polls: never beat the real release event)
                 log("idrag: button was released outside the window; cancelled")
                 self.idrag_cancel()
+        if self.menu is not None:                                   # the right-click menu is up: it handles its own clicks and keys
+            return
         if self.dragging or self.idrag is not None or time.perf_counter() - self.t_open < 0.3:   # never close under a drag in progress
             return
-        if key_down(0x1B):                                          # Esc
+        fresh_key = time.perf_counter() - self.t_eat < 0.5          # a key the filter just took must not also close / go back
+        if key_down(0x1B) and not fresh_key:                        # Esc
             return self.close_fan()
-        bs = key_down(0x08)                                         # Backspace = back to the parent folder
+        bs = key_down(0x08) and not fresh_key                       # Backspace = back to the parent folder
         if bs and not self._bs and self.stack:
             self._bs = True
             return self.go_back()
@@ -264,7 +295,7 @@ class FanOverlay(QWidget):
                     self.away_t = 0.0
                     self.close_fan()
             return
-        if (key_down(0x01) or key_down(0x02)) and not inside:
+        if (key_down(0x01) or key_down(0x02)) and not inside and time.perf_counter() - self.t_menu > 0.3:
             self.close_fan()                                        # click anywhere outside the fan
 
     def start_timer(self):
@@ -313,7 +344,7 @@ class FanOverlay(QWidget):
         if self.carrying():                                         # carrying: scale in place, never push neighbours (targets hold still)
             ex, head_extra = {i: 0.0 for i in ex}, 0.0
         delta = 0.0
-        if self.is_open and self.mouse is not None:
+        if self.is_open and (self.mouse is not None or self.kb is not None):
             f = self.focus
             i0, t = math.floor(f), f - math.floor(f)
             lo_k, hi_k = idxs[0], idxs[-1]
@@ -339,6 +370,10 @@ class FanOverlay(QWidget):
         if self.dropbar is not None:                                # stacked above the header, spaced by the pills' real heights
             gap = (self.header.lh + self.dropbar.lh) * 1.06 / 2 + 18
             self.dropbar.slot = QPointF(self.header.slot.x(), self.header.slot.y() - gap)
+        if self.searchbar is not None:                              # the search pill sits on top of 'Open in Explorer'
+            base = self.dropbar if self.dropbar is not None else self.header
+            gap = (base.lh + self.searchbar.lh) * 1.06 / 2 + 18
+            self.searchbar.slot = QPointF(self.header.slot.x(), base.slot.y() - gap)
         if self.back is not None:
             h = self.header
             self.back.slot = QPointF(h.slot.x() - h.lw / 2 - self.back.lw / 2 - 12, h.slot.y())
@@ -374,7 +409,12 @@ class FanOverlay(QWidget):
         # hover focus: where along the arc the cursor is -> gaussian magnification around it
         amp, f = 0.0, self.focus
         carry = self.carrying()
-        if self.is_open and self.mouse is not None:                 # (while carrying: a gentler magnify, and nothing is pushed aside)
+        if self.is_open and self.kb is not None:                    # keyboard selection: the same magnification, centred on it
+            self.focus += (self.kb - self.focus) * (1 - math.exp(-dt * 16))
+            if abs(self.kb - self.focus) > 0.01:
+                busy = True
+            f, amp = self.focus, S["magnify"]
+        elif self.is_open and self.mouse is not None:               # (while carrying: a gentler magnify, and nothing is pushed aside)
             arg = clamp((self.origin.y() - self.start - self.mouse.y()) / self.R, -1.0, 1.0)
             sm = self.R * math.asin(arg)
             f = self.focus = self.scroll + sm / self.sp
@@ -410,8 +450,8 @@ class FanOverlay(QWidget):
                     el.fillk = 0.0
             if fill > 0 or el.fillk > 0:
                 busy = True
-            if el.kind in ("header", "back", "drop"):
-                t = 1.06 if self.hover is el else 1.0
+            if el.kind in BAR_KINDS:
+                t = 1.06 if (self.hover is el and el.kind != "search") else 1.0
             else:
                 d = (el.idx - f) * self.sp
                 t = 1 + amp * math.exp(-(d / (1.5 * self.sp)) ** 2) * el.edge
@@ -422,12 +462,20 @@ class FanOverlay(QWidget):
             el.hs += (t - el.hs) * (1 - math.exp(-dt * 16))
             if abs(t - el.hs) > 0.003:
                 busy = True
+            if el.thumb_k < 1.0:                                    # a real thumbnail fading in over the icon
+                el.thumb_k = min(1.0, el.thumb_k + dt * 5.0)
+                busy = True
 
         db = self.dropbar
         if db is not None and not (self.drop_mode or self.dragging or self.drag_over or self.idrag is not None) and db.target == 0 and db.t_switch is None and db.x <= 0.01:
             self.dropbar = None                                     # the placeholder has folded away
+        sb = self.searchbar
+        if sb is not None and not self.query and sb.target == 0 and sb.t_switch is None and sb.x <= 0.01:
+            self.searchbar = None                                   # the search pill has folded away
         self.layout()
-        if self.mouse is not None and self.is_open:
+        if self.is_open and self.kb is not None:
+            self.hover = self.cache.get(self.kb)
+        elif self.mouse is not None and self.is_open:
             self.hover = self.hit(self.mouse)
         self.update(self.bounds)
         if not busy:
@@ -448,7 +496,7 @@ class FanOverlay(QWidget):
     def rects(self, el):
         pos = self.cur_pos(el)
         sc = (0.35 + 0.65 * clamp(el.x, 0.0, 1.1)) * el.hs * (0.78 + 0.22 * el.edge)
-        if el.kind in ("header", "back", "drop"):
+        if el.kind in BAR_KINDS:
             w, h = el.lw * sc, el.lh * sc
             return None, QRectF(pos.x() - w / 2, pos.y() - h / 2, w, h)
         s = self.isz * sc
@@ -535,6 +583,9 @@ class FanOverlay(QWidget):
                 g = QRadialGradient(sh.center(), sh.width() / 2)
                 g.setColorAt(0, QColor(0, 0, 0, 120)); g.setColorAt(1, QColor(0, 0, 0, 0))
                 p.setPen(Qt.PenStyle.NoPen); p.setBrush(g); p.drawEllipse(sh)
+                if el.thumb_k < 1.0 and el.old_icon is not None:    # thumbnail fading in: icon underneath, picture over it
+                    p.drawPixmap(icon, el.old_icon, QRectF(el.old_icon.rect()))
+                    p.setOpacity(clamp(el.x * 2.2, 0.0, 1.0) * el.edge * ghost * el.thumb_k)
                 p.drawPixmap(icon, el.icon, QRectF(el.icon.rect()))
             op = clamp((el.x - 0.05) * 1.6, 0.0, 1.0) * el.edge * el.lv * ghost
             if op > 0.01:
@@ -547,6 +598,14 @@ class FanOverlay(QWidget):
                         p.setBrush(Qt.BrushStyle.NoBrush)
                         p.setPen(QPen(QColor(120, 185, 255, 235), 1.8))
                         p.drawRoundedRect(lab.adjusted(.9, .9, -.9, -.9), rad, rad)
+                elif el.kind == "search":                            # the search pill: a steady blue outline says 'typing goes here'
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    p.setPen(QPen(QColor(120, 185, 255, 215), 1.6))
+                    p.drawRoundedRect(lab.adjusted(.9, .9, -.9, -.9), rad, rad)
+                elif el.kind == "item" and self.kb is not None and el.idx == self.kb and self.is_open:
+                    p.setBrush(Qt.BrushStyle.NoBrush)               # the keyboard selection: a blue outline around its name
+                    p.setPen(QPen(QColor(120, 185, 255, 235), 1.8))
+                    p.drawRoundedRect(lab.adjusted(.9, .9, -.9, -.9), rad, rad)
                 elif el.fillk > 0.01 and el.kind in ("back", "item"):   # resting on a folder / the back pill: the border draws itself
                     self.progress_border(p, lab, rad, el.fillk)
         if self.idrag is not None:                                  # the item you are carrying, under the pointer
@@ -559,6 +618,177 @@ class FanOverlay(QWidget):
             p.setOpacity(0.96)
             p.drawPixmap(r, self.idrag.icon, QRectF(self.idrag.icon.rect()))
         p.end()
+
+    # ---- type to filter
+    def keys_active(self):
+        return self.keys is not None and self.keys.active
+
+    def listening(self):
+        """Typing goes to the fan only while it is fully open and nothing is being carried."""
+        return (self.is_open and self.nav_to is None and self.header is not None and not self.carrying()
+                and self.press is None and self.menu is None and S["typefilter"])
+
+    def on_key(self, kind, value):
+        """Called by the keyboard hook for printable keys / Backspace / Esc / Enter. True = the fan takes the key."""
+        if not self.listening():
+            return False
+        if kind == "char":
+            if value == " " and not self.query:
+                return False                                        # a leading space is never a search
+            if len(self.query) >= 48:
+                return True
+            self.query += value
+        elif kind == "back":
+            if not self.query:
+                return False                                        # nothing typed: Backspace keeps meaning 'go back up'
+            self.query = self.query[:-1]
+        elif kind == "esc":
+            if not self.query:
+                return False                                        # nothing typed: Esc keeps meaning 'close'
+            self.query = ""
+        elif kind == "enter":
+            if not self.query and self.kb is None:
+                return False                                        # nothing typed or selected: Enter is not ours
+            self.t_eat = time.perf_counter()
+            QTimer.singleShot(0, lambda rv=(value == "shift"): self.open_selected(rv))
+            return True
+        elif kind == "nav":
+            return self.nav_key(value)
+        elif kind == "menu":
+            if self.kb is None:
+                return False
+            QTimer.singleShot(0, self.menu_for_selection)
+            return True
+        self.t_eat = time.perf_counter()
+        if not self.kick:                                           # (the hook must answer fast: do the real work a moment later)
+            self.kick = True
+            QTimer.singleShot(0, self.apply_filter)
+        return True
+
+    def apply_filter(self):
+        self.kick = False
+        if self.header is None or not self.is_open or self.query == self.applied:
+            return
+        now = time.perf_counter()
+        self.applied = q = self.query
+        self.kb = None
+        self.entries = filter_entries(self.all_entries, q, self.folder)
+        self.maxscroll = float(max(0, len(self.entries) - self.cap))
+        self.scroll = self.sv = self.target = 0.0
+        self.reuse = {el.path: el for el in self.cache.values() if el.kind == "item"}
+        self.cache, self.fresh, self.n_new = {}, now, 0
+        self.ensure_cache()
+        self.reuse, self.fresh = {}, None
+        shown = q if len(q) <= 24 else "…" + q[-23:]
+        text = "⌕  " + shown + "▏" if q else ""
+        sb = self.searchbar
+        if q:
+            if sb is None:
+                sb = self.searchbar = Elt("search", self.folder, text, self.dpr)
+                sb.x = sb.v = sb.target = 0.0
+            else:
+                sb.set_text(text)
+            sb.pending, sb.t_switch = 1.0, (now if sb.target < 0.5 else None)
+            if sb.target >= 0.5:
+                sb.target = 1.0
+        elif sb is not None:
+            sb.pending, sb.t_switch = 0.0, now                      # query cleared: the pill folds away
+        self.hover = None
+        self.start_timer()
+        self.update()
+
+    # ---- keyboard control: arrows move, Enter opens, Shift+Enter shows it in Explorer, Right dives in, Left goes back
+    def nav_key(self, name):
+        ents = self.entries
+        real = bool(ents) and ents[0][2] != self.folder              # (the 'Folder is empty' / 'No matches' placeholder can't be selected)
+        if name == "left":
+            if not self.stack:
+                return False
+            QTimer.singleShot(0, self.go_back)
+            return True
+        if name == "right":
+            if self.kb is None or not real or self.kb >= len(ents):
+                return False
+            _, _, path, isd = ents[self.kb]
+            if not (isd and S["subfolders"]):
+                return False
+            QTimer.singleShot(0, lambda p=path: self.navigate(p))
+            return True
+        if not real:
+            return False
+        last, cur = len(ents) - 1, self.kb
+        step = {"up": 1, "down": -1, "pgup": self.cap, "pgdn": -self.cap}.get(name)
+        if name == "home":
+            new = 0
+        elif name == "end":
+            new = last
+        elif cur is None:
+            new = 0                                                 # the first arrow press lands on the item next to the taskbar
+        else:
+            new = cur + step
+        self.kb = int(clamp(new, 0, last))
+        if self.kb < self.target:                                   # keep it on screen
+            self.target = float(self.kb)
+        elif self.kb > self.target + self.cap - 1:
+            self.target = float(self.kb - self.cap + 1)
+        self.target = clamp(self.target, 0.0, self.maxscroll)
+        self.t_wheel = time.perf_counter()
+        self.mouse = None                                           # the pointer no longer decides what is magnified
+        self.start_timer()
+        self.update()
+        return True
+
+    def open_selected(self, reveal=False):
+        """Enter: open the selected item (or the best match when you typed); a folder opens inside the fan like a click."""
+        if not self.is_open or self.header is None or not self.entries:
+            return
+        i = self.kb if self.kb is not None and self.kb < len(self.entries) else 0
+        _, name, path, isd = self.entries[i]
+        if path == self.folder:
+            return                                                  # a placeholder
+        if reveal:
+            ctxmenu.show_in_explorer(path)
+            return self.close_fan()
+        if isd and S["subfolders"]:
+            return self.navigate(path)
+        open_path(path)
+        self.close_fan()
+
+    open_top = open_selected
+
+    # ---- right-click menu
+    def show_menu(self, el, gpos):
+        if self.menu is not None:
+            self.menu.close()
+        m = self.menu = ctxmenu.build(self, el.path, os.path.isdir(el.path), el.icon)
+        m.chosen.connect(lambda _k: self.close_fan())
+        m.closed.connect(lambda m=m: QTimer.singleShot(0, lambda: self.menu_gone(m)))
+        self.hover = el
+        m.popup(QPointF(gpos))
+
+    def menu_gone(self, m=None):
+        if m is not None:
+            m.deleteLater()
+        if m is not None and m is not self.menu:
+            return                                                  # an older menu closing after a newer one opened
+        self.menu, self.t_menu = None, time.perf_counter()
+
+    def menu_for_selection(self):
+        el = self.cache.get(self.kb) if self.kb is not None else None
+        if el is not None and not el.dummy and self.is_open:
+            self.show_menu(el, self.mapToGlobal(self.cur_pos(el).toPoint()))
+
+    def on_thumb(self, path):
+        """A thumbnail finished loading in the background: put it on the item (if that item is on screen)."""
+        if self.header is None or not self.cache:
+            return
+        key = os.path.normcase(path)
+        for el in self.cache.values():
+            if el.kind == "item" and os.path.normcase(el.path) == key and el.thumb is None:
+                pm = thumbs.get().peek(el.path, el.mtime)
+                if pm is not None:
+                    el.set_thumb(pm)
+                    self.start_timer()
 
     # ---- input
     def can_drag(self, el):
@@ -574,6 +804,10 @@ class FanOverlay(QWidget):
             icon = render.ICONS.icon(QFileInfo(el.path)).pixmap(QSize(128, 128))       # the largest shell icon available
         except Exception:
             pass
+        if el.thumb is not None:
+            icon = el.thumb                                         # a picture / video / PDF: carry its thumbnail
+        elif el.icon is not None and el.icon.width() >= 96:
+            icon = el.icon                                          # (the full-size shell icon we already have)
         if icon.isNull():
             icon = el.icon
         lab, lw, lh, lm = glass_label(os.path.basename(el.path.rstrip("\\/")) or el.path, 1.0)
@@ -763,6 +997,10 @@ class FanOverlay(QWidget):
             self.close_fan()
 
     def mouseMoveEvent(self, e):
+        if self.kb is not None and (e.position() - self.last_pt).manhattanLength() < 3:
+            return                                                  # (a stray event without real movement: keep the keyboard selection)
+        self.last_pt = e.position()
+        self.kb = None
         self.mouse = e.position()
         if self.idrag is not None:
             if not (e.buttons() & Qt.MouseButton.LeftButton):
@@ -785,7 +1023,7 @@ class FanOverlay(QWidget):
             if (e.position() - p0).manhattanLength() >= QApplication.startDragDistance() and self.can_drag(el):
                 return self.begin_idrag(el, e.position())
         self.hover = self.hit(self.mouse) if self.is_open else None
-        self.setCursor(Qt.CursorShape.PointingHandCursor if self.hover else Qt.CursorShape.ArrowCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor if (self.hover and self.hover.kind != "search") else Qt.CursorShape.ArrowCursor)
         self.start_timer()
 
     # ---- files dropped ON the fan (held over a pinned button, dragged from another app, or from this very fan)
@@ -872,6 +1110,11 @@ class FanOverlay(QWidget):
         if not self.is_open:
             return
         self.press = None
+        if e.button() == Qt.MouseButton.RightButton:                # right-click on a file or folder: its menu
+            el = self.hit(e.position())
+            if el is not None and el.kind == "item" and not el.dummy:
+                return self.show_menu(el, e.globalPosition().toPoint())
+            return self.close_fan()
         el = self.hit(e.position()) if e.button() == Qt.MouseButton.LeftButton else None
         if el is None:
             return self.close_fan()
@@ -888,7 +1131,9 @@ class FanOverlay(QWidget):
             return                                                  # it was a drag that didn't leave: not a click
         if el.kind == "back":
             return self.go_back()
+        if el.kind == "search" or (el.kind == "item" and el.dummy and self.query):
+            return                                                  # nothing to open there
         if el.kind == "item" and el.nav and S["subfolders"]:
             return self.navigate(el.path)                           # dive into the folder, inside the fan
-        open_path(el.path)                                          # a file, or "Open in Explorer"
+        open_path(real_folder(el.path) if (el.kind == "header" or el.dummy) else el.path)   # a file, or "Open in Explorer"
         self.close_fan()

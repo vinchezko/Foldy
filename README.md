@@ -25,6 +25,12 @@ Pin any folder. Click it. Its contents spring out above the button along a smoot
 - **Drop files onto a stack.** Drag files from Explorer (or any app) and hold them over a pinned button: its fan opens. Drop on the fan to put them in that folder, or on a folder inside the fan to put them in that sub-folder. (Dropping straight onto the taskbar button also works wherever Windows allows it.) Foldy moves or copies them with Explorer's own progress dialog and name-clash handling. **Ctrl** copies, **Shift** moves; otherwise *Settings → Files dropped on a button* decides (**Smart** = move on the same drive, copy across drives, like Explorer).
 - **Spring-loaded folders and a drop placeholder.** While a file is being dragged over a fan, a blue **“↓ Drop in <folder>”** pill appears at the top: drop on it (or on empty fan space) to put the file in that folder. Rest the file on a folder for a moment and the fan opens it (the pill follows); rest it on the **◀ back** pill and it goes back up. You can also drag a file from the fan onto a folder in the same fan, or onto the back pill to move it up a level. Move the drag away from the fan and the fan closes. While you carry a file out of a fan, a round **✕** appears in the top-left corner of the screen: it grows into a “Cancel move” pill when you reach it, and dropping the file there cancels the move.
 - **Folders inside folders** (optional, on by default): click a folder in the fan and it unfolds in place, with a ◀ back pill. Toggle it in Settings.
+- **Type to filter.** Open a big folder and just start typing: a search pill appears on top of *Open in Explorer* and the fan narrows to matching names (best matches nearest the taskbar). `Enter` opens the top match, `Backspace` deletes a letter, `Esc` clears the search (a second `Esc` closes the fan). Switch it off in Settings.
+- **A settings window that is easy to find your way around.** A sidebar with five pages (Appearance, Behaviour, Features, Stacks, Updates & about). Every slider says what it does, every choice explains itself, the Stacks page lists your pinned folders (click one to open it), a trash button on each one removes it (button, shortcut and icon; never your folder), and *Preview fan* is always at the bottom.
+- **Keyboard control.** With a fan open, `↑` / `↓` move through the items (the first press lands on the one next to the taskbar), `Enter` opens the selected one, `Shift+Enter` shows it in Explorer, `→` dives into a folder, `←` or `Backspace` goes back, `Home` / `End` / `PgUp` / `PgDn` jump. The mouse takes over again the moment you move it.
+- **Smart stacks.** A stack can be a rule instead of one folder: *Recent files*, *Newest 20 downloads*, *Recent pictures*, or your own mix of places, file type (pictures, videos, documents, audio), age (today / 7 / 30 days) and count. Tray icon or Settings → **Smart stack…**. It pins to the taskbar like any other stack and re-scans itself in the background so it opens instantly.
+- **Right-click menu** on any item, drawn to match the fan: a header with the item's picture, name, size and date, then Open, Open with…, Show in Explorer and Copy path, with line icons and key hints. Works with the keyboard too (menu key or `Shift+F10`, then `↑` `↓` `Enter`).
+- **Real thumbnails** for pictures, videos and PDFs instead of generic icons. They load in the background (three at a time), fade in, and are remembered on disk, so a file you have seen once shows its picture the moment the fan opens. They also follow the file when you drag it out. Videos and PDFs use the same thumbnails Explorer shows (PDFs need a PDF thumbnail handler, e.g. Edge or Acrobat); files without one keep their normal icon.
 - **Fast.** Pinned buttons run a ~100 ms launcher; icons and labels are pre-loaded.
 - **Compact settings window** (density, speed, glass opacity, magnification, arc curve, item count, sorting…) with animated switches, a sliding sort control and a reset button on every slider.
 - **Updates itself, politely.** Foldy checks this repository's latest GitHub release (at start-up and every 6 hours; switch it off in Settings). When there is a newer version it asks **Update now / Later**. *Later* leaves a green **Update** button next to *Reset all* (and an entry in the tray menu). The download comes only from this repo's releases and is checked against its size and SHA-256 before it is installed.
@@ -53,6 +59,9 @@ Supported: Windows 10 / 11 (64-bit), taskbar at the bottom of the primary monito
 | Hold dragged files over a pinned button, then drop on the fan | Moves or copies them into that folder (**Ctrl** = copy, **Shift** = move; hold the key for a moment after you drop) |
 | Click **Open in Explorer ↗** (top of the arc) | Opens the folder |
 | Scroll wheel / touchpad | Scrolls long folders |
+| `↑` `↓` / `Enter` / `Shift+Enter` / `→` `←` | Select / open / show in Explorer / into a folder / back |
+| Right-click an item | Open, Open with…, Show in Explorer, Copy path |
+| Start typing in an open fan | Filters it by name; `Enter` opens the top match, `Esc` clears |
 | Click outside, `Esc`, or the button again | Closes the fan |
 | Click a folder in the fan | Opens it inside the fan; **◀** (or `Backspace`) goes back up |
 | Click the tray icon (or right-click → **Settings…**) | Opens the settings window |
@@ -77,7 +86,7 @@ Run from source without building: `pip install PyQt6 pywin32`, then `python src\
 
 Build, then attach `dist\Foldy.exe` to a GitHub release. Keep the file name `Foldy.exe` so the website's download button and the in-app updater work.
 
-For updates to be offered, tag the release with a version **higher than the one users run** (`v1.2.0` → `v1.2.1`, `v1.3.0`…) and publish it as a normal release (not a draft or pre-release). Bump `VERSION` in `src/foldy/constants.py` and the two numbers in `packaging/version_info.txt` before building. People on v1.0.0 have no updater yet, so they install v1.1.0 or newer once by hand.
+For updates to be offered, tag the release with a version **higher than the one users run** (`v1.3.5` → `v1.3.6`, `v1.4.0`…) and publish it as a normal release (not a draft or pre-release). Bump `VERSION` in `src/foldy/constants.py` and the two numbers in `packaging/version_info.txt` before building. People on v1.0.0 have no updater yet, so they install v1.1.0 or newer once by hand.
 
 The website's download counter adds up the `.exe` downloads of all releases (it includes updates downloaded by the app).
 
@@ -98,6 +107,10 @@ src/
     app.py              Foldy.exe entry: install hand-off, IPC
     hub.py              resident app: tray, IPC server, fan control, add/pin and uninstall flows
     fan.py              fan overlay: arc layout, springs, magnification, scrolling
+    ctxmenu.py          the right-click menu of an item
+    smartdialog.py      the "New smart stack" window
+    keyhook.py          keyboard hook that feeds typing to the open fan
+    thumbs.py           background thumbnails (images, videos, PDFs)
     render.py           cached icons, glass labels, folder listings
     winutil.py          Windows helpers: taskbar geometry, UI Automation, click tracker
     dropzone.py         files dropped on a pinned button: move/copy decision and transfer

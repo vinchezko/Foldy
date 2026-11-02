@@ -555,4 +555,34 @@ if (hold) {
   draw();
 }
 
+
+/* ---------- features: live "type to filter" mini demo + settings notes ---------- */
+(function(){
+  var input = document.getElementById("mf-input"), list = document.getElementById("mf-list");
+  if(input && list){
+    var files = [["i-pdf","Report Q3.pdf"],["i-doc","Resume.docx"],["i-img","Holiday photo.jpg"],["i-doc","Meeting notes.txt"],
+                 ["i-zip","Project backup.zip"],["i-pdf","Invoice March.pdf"],["i-code","render.py"],["i-video","Screen recording.mp4"],["i-img","Receipt.png"]];
+    function esc(s){return s.replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c]})}
+    function rank(n,q){var l=n.toLowerCase(),i=l.indexOf(q);if(i<0)return null;if(i===0)return 0;return /[a-z0-9]/.test(l[i-1])?2:1}
+    function draw(){
+      var q=input.value.trim().toLowerCase(),out=[];
+      files.forEach(function(f,k){var r=q?rank(f[1],q):0;if(r!==null)out.push([r,k,f])});
+      out.sort(function(a,b){return a[0]-b[0]||a[1]-b[1]});
+      list.innerHTML=out.slice(0,4).map(function(o){
+        var n=o[2][1],i=q?n.toLowerCase().indexOf(q):-1;
+        var label=i<0?esc(n):esc(n.slice(0,i))+"<em>"+esc(n.slice(i,i+q.length))+"</em>"+esc(n.slice(i+q.length));
+        return '<li><svg><use href="#'+o[2][0]+'"/></svg><span>'+label+'</span></li>';
+      }).join("")||'<li class="none">No matches</li>';
+    }
+    input.addEventListener("input",draw);draw();
+  }
+  var sort=document.getElementById("o-sort"),note=document.getElementById("o-sort-note");
+  if(sort&&note){
+    var notes=["Newest first: what changed last sits right next to the taskbar.","A to Z by name, with folders and files mixed together.","Folders first, then files, each group A to Z."];
+    sort.addEventListener("change",function(){note.textContent=notes[sort.selectedIndex]});
+  }
+  var smart=document.getElementById("b-smart");
+  if(smart)smart.addEventListener("click",function(){var t=document.querySelector("#stage-try .toast");if(t){t.textContent="In the app this builds a stack from a rule, e.g. “Newest 20 downloads”";t.classList.add("show");setTimeout(function(){t.classList.remove("show")},2600)}});
+})();
+
 })();

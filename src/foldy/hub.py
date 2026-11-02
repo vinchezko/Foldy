@@ -1,16 +1,17 @@
 """The resident app: tray icon, IPC server, fan control, add/pin flow and uninstall flow."""
-import json, os, subprocess, sys, threading, traceback
+import json, os, re, shutil, subprocess, sys, threading, time, traceback
 from PyQt6.QtCore import QObject, QTimer, QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QIcon
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import QApplication, QFileDialog, QFileIconProvider, QMenu, QSystemTrayIcon
-from . import dropzone, render, updater
-from .constants import APP, AUTHOR, DETACHED, GITHUB, INSTALL_DIR, PIPE, VERSION
+from . import dropzone, render, thumbs, updater
+from .constants import APP, AUTHOR, DETACHED, GITHUB, INSTALL_DIR, NO_WINDOW, PIPE, VERSION
 from .dragwatch import DragWatch
 from .fan import FanOverlay
 from .render import _label_cache, entries_for, glass_label, icon_pixmap
 from .settings import RUNTIME, S, load_settings, log, save_settings, settings_file
 from .settings_window import SettingsWindow
+from .smartdialog import SmartDialog
 from .shortcuts import (folder_id, lnk_desc, make_icon, make_shortcut, migrate_shortcut, pick_folder,
                         pin_to_taskbar, warm_imports)
 from .uninstaller import UninstallConfirm, uninstall_steps
@@ -24,6 +25,7 @@ class Bridge(QObject):
     done = pyqtSignal(str, str, bool, str)       # folder, shortcut, pinned?, error
     stacks = pyqtSignal(list)                    # folders of the pinned stacks
     checked = pyqtSignal(bool, dict, bool)       # update check finished: reached GitHub?, newest release, asked by the user?
+    removed = pyqtSignal(str, int)               # a stack was removed: folder, how many taskbar buttons went with it
     dropped = pyqtSignal(str, str, int, str)     # files dropped on a button: verb, folder, how many were done, error
 
 
@@ -36,13 +38,14 @@ class Hub:
         self.drop_fan.on_drop = self.overlay.on_drop
         self.overlay.on_note = self.drop_fan.on_note = lambda text: self.note(text)
         self.server, self.first_run = server, first_run
-        self.settings_win, self.picking = None, False
+        self.settings_win, self.picking, self.smart_win = None, False, None
         self.confirm_win = self.progress_win = None
         self.bridge = Bridge()
         self.bridge.done.connect(self.on_done)
         self.bridge.stacks.connect(self.on_stacks)
         self.bridge.checked.connect(self.on_checked)
         self.bridge.dropped.connect(self.on_dropped)
+        self.bridge.removed.connect(self.on_removed)
         self.update_info, self.update_prompt, self.update_win = None, None, None
         self._checking = False
         self._stacks, self._warm_queue = [], []
@@ -65,6 +68,7 @@ class Hub:
         self.act_update.setVisible(False)
         m.addAction("Settings…", self.open_settings)
         m.addAction("Add folder & pin to taskbar…", self.add_folder)
+        m.addAction("Add smart stack…", self.add_smart)
         m.addAction("Open shortcuts folder", lambda: open_path(data_dir()))
         m.addAction("Copy diagnostics", self.copy_diagnostics)
         m.addSeparator()
@@ -83,6 +87,9 @@ class Hub:
         self.seed_timer.timeout.connect(self.seed_buttons)
         self.seed_timer.start()
         QTimer.singleShot(5000, self.seed_buttons)
+        self.smart_timer = QTimer(interval=20000)                           # smart stacks re-scan quietly, so opening one is instant
+        self.smart_timer.timeout.connect(self.refresh_smart_stacks)
+        self.smart_timer.start()
         self.dragwatch = DragWatch(self)                                     # drag a file over a pinned button -> its fan opens
         self.update_timer = QTimer(interval=6 * 3600 * 1000)               # look for a new version every 6 hours
         self.update_timer.timeout.connect(self.auto_check)
@@ -91,7 +98,7 @@ class Hub:
 
     def status(self, text):
         if self.settings_win is not None:
-            self.settings_win.status.setText(text)
+            self.settings_win.set_status(text)
 
     def note(self, text):
         self.tray.showMessage(APP, text, QSystemTrayIcon.MessageIcon.Information, 5000)
@@ -119,6 +126,8 @@ class Hub:
             return self.open_uninstall()
         if cmd == "add":
             return self.add_folder()
+        if cmd == "smart":
+            return self.add_smart()
         if cmd == "home":
             return self.add_folder() if self.first_run else self.open_settings()
         f = msg.get("folder")
@@ -185,6 +194,8 @@ class Hub:
         files = [p for p in files if isinstance(p, str) and os.path.exists(p)]
         if not files:
             return
+        if render.smart_spec(folder):
+            return self.note("A smart stack only shows files from other folders, so it can't receive files.")
         verb = dropzone.choose_verb(files, folder, S["dropmode"], mods)
         items = dropzone.usable(files, folder, verb)
         if not items:
@@ -279,6 +290,8 @@ class Hub:
     def on_stacks(self, folders):
         self._stacks = list(folders)
         self.rewarm()
+        if self.settings_win is not None:
+            self.settings_win.refresh_stacks()
 
     def rewarm(self):
         self._warm_queue = list(self._stacks)
@@ -288,15 +301,27 @@ class Hub:
         if not self._warm_queue or RUNTIME["uninstalling"]:
             return
         folder = self._warm_queue.pop()
+        if render.smart_spec(folder):                                # (these scan other folders: never on the GUI thread)
+            threading.Thread(target=render.refresh_smart, args=(folder,), daemon=True).start()
+            return QTimer.singleShot(60, self._warm_next)
         try:
             dpr = QApplication.primaryScreen().devicePixelRatio()
-            for _, name, path, isd in entries_for(folder, S["sort"])[:int(S["maxvis"])]:
+            for mt, name, path, isd in entries_for(folder, S["sort"])[:int(S["maxvis"])]:
                 icon_pixmap(path, isd)
+                if thumbs.wants(path, isd):
+                    thumbs.get().fetch(path, mt, dpr)                # thumbnails are ready before the fan is opened
                 glass_label(name, dpr)
             glass_label("Open in Explorer  ↗", dpr)
         except Exception:
             pass
         QTimer.singleShot(60, self._warm_next)
+
+    def refresh_smart_stacks(self):
+        if self.overlay.is_open or RUNTIME["uninstalling"]:
+            return
+        for f in self._stacks:
+            if render.smart_spec(f):
+                threading.Thread(target=render.refresh_smart, args=(f,), daemon=True).start()
 
     # ---- updates: ask GitHub, ask the user, download, hand over to the installer
     def auto_check(self):
@@ -413,7 +438,10 @@ class Hub:
         self.first_run = False
         if not path:
             return
-        d = os.path.normpath(path)
+        self.pin_folder(os.path.normpath(path))
+
+    def pin_folder(self, d):
+        """Make the button icon + shortcut for folder `d` and pin it (the slow shell work runs on a thread)."""
         self.status(f"Adding “{os.path.basename(d.rstrip(chr(92) + '/')) or d}”…")
         try:
             icon = make_icon(d, folder_id(d))                        # tiny; done here, the slow shell work is threaded
@@ -421,6 +449,95 @@ class Hub:
             log(traceback.format_exc())
             return self.note(f"Couldn't create the icon ({ex}).")
         threading.Thread(target=self._pin_worker, args=(d, icon), daemon=True).start()
+
+    # ---- remove a stack: its taskbar button, shortcut and icon (and the rule folder of a smart stack). Never the folder itself.
+    def remove_stack(self, folder):
+        self.overlay.hide_now()
+        self.drop_fan.hide_now()
+        self.status(f"Removing “{os.path.basename(folder.rstrip(chr(92) + '/')) or folder}”…")
+        threading.Thread(target=self._remove_worker, args=(folder,), daemon=True).start()
+
+    def _remove_worker(self, folder):
+        pins = 0
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+            try:
+                want = "Foldy stack: " + folder
+                for d, is_pin in ((docs_path(), False), (pinned_dir(), True)):
+                    if not os.path.isdir(d):
+                        continue
+                    for f in os.listdir(d):
+                        fp = os.path.join(d, f)
+                        if f.lower().endswith(".lnk") and (lnk_desc(fp) or "").strip() == want:
+                            try:
+                                os.remove(fp)
+                                pins += is_pin
+                            except OSError:
+                                pass
+            finally:
+                pythoncom.CoUninitialize()
+            try:
+                os.remove(os.path.join(data_dir(), "Icons", folder_id(folder) + ".ico"))
+            except OSError:
+                pass
+            smart_root = os.path.normcase(os.path.join(data_dir(), "Smart"))
+            if render.smart_spec(folder) and os.path.normcase(os.path.abspath(folder)).startswith(smart_root + os.sep):
+                shutil.rmtree(folder, ignore_errors=True)          # only ever Foldy's own rule folder, never a real one
+            if pins:                                               # Windows only forgets a removed pin when Explorer restarts
+                subprocess.run(["taskkill", "/f", "/im", "explorer.exe"], creationflags=NO_WINDOW, capture_output=True)
+                for _ in range(40):
+                    time.sleep(0.15)
+                    out = subprocess.run(["tasklist", "/fi", "imagename eq explorer.exe", "/nh"], creationflags=NO_WINDOW,
+                                         capture_output=True, text=True).stdout
+                    if "explorer.exe" in out.lower():
+                        break
+                else:
+                    subprocess.Popen(["explorer.exe"], creationflags=NO_WINDOW)
+        except Exception:
+            log(traceback.format_exc())
+        self.bridge.removed.emit(folder, pins)
+
+    def on_removed(self, folder, pins):
+        self._stacks = [f for f in self._stacks if f != folder]
+        _BTN_CACHE.pop("foldy." + folder_id(folder), None)
+        render._entries_cache.pop(folder, None)
+        name = os.path.basename(folder.rstrip("\\/")) or folder
+        self.status(f"Removed “{name}”. Your folder and files were not touched.")
+        if self.settings_win is not None:
+            self.settings_win.refresh_stacks()
+
+    # ---- smart stacks: a small folder holding a rule; everything else (pinning, icon, opening) works like any stack
+    def add_smart(self):
+        if self.smart_win is None or not self.smart_win.isVisible():
+            self.smart_win = SmartDialog()
+            self.smart_win.created.connect(self.create_smart)
+        w = self.smart_win
+        if w.isMinimized():
+            w.showNormal()
+        w.show(); w.raise_(); w.activateWindow()
+        bring_to_front(w)
+
+    def create_smart(self, spec):
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", spec.get("name") or "").strip(" .")[:60] or "Smart stack"
+        base = os.path.join(data_dir(), "Smart")
+        d, n = os.path.join(base, name), 2
+        while os.path.exists(d):
+            d = os.path.join(base, f"{name} ({n})"); n += 1
+        try:
+            os.makedirs(d)
+            spec = dict(spec, name=os.path.basename(d))
+            with open(os.path.join(d, render.SMART_FILE), "w", encoding="utf-8") as f:
+                json.dump(spec, f, indent=1)
+            if os.name == "nt":
+                subprocess.run(["attrib", "+h", os.path.join(d, render.SMART_FILE)], creationflags=NO_WINDOW,
+                               check=False)                              # hidden: it is plumbing, not something to browse
+        except OSError as ex:
+            log(traceback.format_exc())
+            return self.note(f"Couldn't create the smart stack ({ex}).")
+        self.first_run = False
+        log(f"smart stack created: {d} {spec}")
+        self.pin_folder(d)
 
     def _pin_worker(self, d, icon):
         lnk, pinned, err = "", False, ""
@@ -442,6 +559,8 @@ class Hub:
         if pinned:
             msg = f"Pinned “{name}” to the taskbar. Use the tray icon to add more."
             self._stacks.append(d); self.warm_timer.start()
+            if self.settings_win is not None:
+                self.settings_win.refresh_stacks()
         elif lnk:
             subprocess.Popen(["explorer", "/select,", lnk])
             msg = "Windows doesn't allow apps to pin automatically any more. Drag the selected shortcut onto your taskbar (or right-click it → Show more options → Pin to taskbar)."
@@ -455,7 +574,7 @@ def run(msg):
     def _hook(et, ev, tb):                                        # PyQt aborts the whole process on an unhandled error in a slot/event:
         log("".join(traceback.format_exception(et, ev, tb)))      # log it instead, so one bug never takes Foldy down
     sys.excepthook = _hook
-    log(f"Foldy {VERSION} starting (build: v1.2.0)")
+    log(f"Foldy {VERSION} starting (build: v1.3.5)")
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)                             # tray app: closing settings must not quit
     app.setApplicationName(APP)
