@@ -2,10 +2,13 @@
 import os
 
 
-APP, VERSION = "Foldy", "1.3.5"
+APP, VERSION = "Foldy", "1.3.6"
 
 
 AUTHOR, GITHUB = "vinchezko", "https://github.com/vinchezko"
+
+
+FEEDBACK_URL = "https://forms.gle/ZbeEqztrGYi3z2Wd8"   # Google Form: request a feature, report an issue, ask a question
 
 
 REPO, ASSET_NAME = "vinchezko/Foldy", "Foldy.exe"       # where updates are published (a GitHub release with Foldy.exe attached)

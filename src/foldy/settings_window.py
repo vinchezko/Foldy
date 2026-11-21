@@ -1,11 +1,11 @@
 """The settings window: a sidebar with five pages (Appearance, Behaviour, Features, Stacks, Updates & about) instead of one
 long wall of controls. Everything applies instantly; 'Preview fan' is always one click away at the bottom."""
 import html, os
-from PyQt6.QtCore import QRectF, QSize, QTimer, Qt
-from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PyQt6.QtCore import QRectF, QSize, QTimer, QUrl, Qt
+from PyQt6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSlider,
                              QStackedWidget, QToolButton, QVBoxLayout, QWidget, QMessageBox)
-from .constants import AUTHOR, GITHUB, VERSION
+from .constants import AUTHOR, FEEDBACK_URL, GITHUB, VERSION
 from .controls import Segmented, Toggle, update_pixmap
 from .render import real_folder, smart_spec
 from .settings import DEFAULTS, S
@@ -372,7 +372,10 @@ class SettingsWindow(QWidget):
         check.clicked.connect(lambda *_: self.hub.check_updates(manual=True))
         diag = QPushButton("Copy diagnostics"); diag.setObjectName("ghost")
         diag.clicked.connect(lambda *_: self.hub.copy_diagnostics())
-        for b in (check, diag):
+        fb = QPushButton("Send feedback"); fb.setObjectName("ghost")
+        fb.setToolTip("Request a feature, report an issue or ask a question")
+        fb.clicked.connect(lambda *_: QDesktopServices.openUrl(QUrl(FEEDBACK_URL)))
+        for b in (check, diag, fb):
             b.setCursor(Qt.CursorShape.PointingHandCursor); row.addWidget(b)
         row.addStretch()
         cl.addLayout(row)
@@ -390,7 +393,8 @@ class SettingsWindow(QWidget):
 
     # ---------------------------------------------------------------- state
     def show_credit(self):
-        self.status.setText(f'by <a style="color:#4cc9ff;text-decoration:none" href="{GITHUB}">{AUTHOR}</a>')
+        self.status.setText(f'by <a style="color:#4cc9ff;text-decoration:none" href="{GITHUB}">{AUTHOR}</a>'
+                            f' · <a style="color:#4cc9ff;text-decoration:none" href="{FEEDBACK_URL}">Feedback</a>')
 
     def set_status(self, text):
         self.status.setText(html.escape(text))                      # (the sidebar is not a fixed-size layout: wrapping just works)

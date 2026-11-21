@@ -86,7 +86,7 @@ Run from source without building: `pip install PyQt6 pywin32`, then `python src\
 
 Build, then attach `dist\Foldy.exe` to a GitHub release. Keep the file name `Foldy.exe` so the website's download button and the in-app updater work.
 
-For updates to be offered, tag the release with a version **higher than the one users run** (`v1.3.5` → `v1.3.6`, `v1.4.0`…) and publish it as a normal release (not a draft or pre-release). Bump `VERSION` in `src/foldy/constants.py` and the two numbers in `packaging/version_info.txt` before building. People on v1.0.0 have no updater yet, so they install v1.1.0 or newer once by hand.
+For updates to be offered, tag the release with a version **higher than the one users run** (`v1.3.6` → `v1.3.7`, `v1.4.0`…) and publish it as a normal release (not a draft or pre-release). Bump `VERSION` in `src/foldy/constants.py` and the two numbers in `packaging/version_info.txt` before building. People on v1.0.0 have no updater yet, so they install v1.1.0 or newer once by hand.
 
 The website's download counter adds up the `.exe` downloads of all releases (it includes updates downloaded by the app).
 

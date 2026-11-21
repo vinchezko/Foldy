@@ -5,7 +5,7 @@ from PyQt6.QtGui import QDesktopServices, QIcon
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import QApplication, QFileDialog, QFileIconProvider, QMenu, QSystemTrayIcon
 from . import dropzone, render, thumbs, updater
-from .constants import APP, AUTHOR, DETACHED, GITHUB, INSTALL_DIR, NO_WINDOW, PIPE, VERSION
+from .constants import APP, AUTHOR, DETACHED, FEEDBACK_URL, GITHUB, INSTALL_DIR, NO_WINDOW, PIPE, VERSION
 from .dragwatch import DragWatch
 from .fan import FanOverlay
 from .render import _label_cache, entries_for, glass_label, icon_pixmap
@@ -71,6 +71,7 @@ class Hub:
         m.addAction("Add smart stack…", self.add_smart)
         m.addAction("Open shortcuts folder", lambda: open_path(data_dir()))
         m.addAction("Copy diagnostics", self.copy_diagnostics)
+        m.addAction("Send feedback…", lambda: QDesktopServices.openUrl(QUrl(FEEDBACK_URL)))
         m.addSeparator()
         m.addAction(f"by {AUTHOR}", lambda: QDesktopServices.openUrl(QUrl(GITHUB)))
         m.addAction("Quit Foldy", QApplication.quit)
@@ -574,7 +575,7 @@ def run(msg):
     def _hook(et, ev, tb):                                        # PyQt aborts the whole process on an unhandled error in a slot/event:
         log("".join(traceback.format_exception(et, ev, tb)))      # log it instead, so one bug never takes Foldy down
     sys.excepthook = _hook
-    log(f"Foldy {VERSION} starting (build: v1.3.5)")
+    log(f"Foldy {VERSION} starting (build: v1.3.6)")
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)                             # tray app: closing settings must not quit
     app.setApplicationName(APP)
