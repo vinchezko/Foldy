@@ -28,10 +28,11 @@ Pin any folder. Click it. Its contents spring out above the button along a smoot
 - **Type to filter.** Open a big folder and just start typing: a search pill appears on top of *Open in Explorer* and the fan narrows to matching names (best matches nearest the taskbar). `Enter` opens the top match, `Backspace` deletes a letter, `Esc` clears the search (a second `Esc` closes the fan). Switch it off in Settings.
 - **A settings window that is easy to find your way around.** A sidebar with five pages (Appearance, Behaviour, Features, Stacks, Updates & about). Every slider says what it does, every choice explains itself, the Stacks page lists your pinned folders (click one to open it), a trash button on each one removes it (button, shortcut and icon; never your folder), and *Preview fan* is always at the bottom.
 - **Keyboard control.** With a fan open, `↑` / `↓` move through the items (the first press lands on the one next to the taskbar), `Enter` opens the selected one, `Shift+Enter` shows it in Explorer, `→` dives into a folder, `←` or `Backspace` goes back, `Home` / `End` / `PgUp` / `PgDn` jump. The mouse takes over again the moment you move it.
+- **Customize any stack's icon.** On *Settings → Stacks* a palette button sits next to the bin on every stack. It opens an editor with a live preview of the real taskbar icon: pick a **texture** (Solid, Gradient, Zebra, Forest, Ocean, Sunset, Leopard, Carbon, Galaxy, Camo, Honeycomb, Candy; all drawn in code), a **colour** (16 swatches, the automatic hue, or any colour you like for Solid and Gradient), and the **text or emoji** written on it (up to two characters, a quick emoji row, or paste your own), with Auto / White / Dark lettering. *Apply* rewrites the stack's icon and, if you leave the box ticked, restarts Explorer for a moment so the taskbar shows it; *Reset to default* brings back the automatic look.
 - **Smart stacks.** A stack can be a rule instead of one folder: *Recent files*, *Newest 20 downloads*, *Recent pictures*, or your own mix of places, file type (pictures, videos, documents, audio), age (today / 7 / 30 days) and count. Tray icon or Settings → **Smart stack…**. It pins to the taskbar like any other stack and re-scans itself in the background so it opens instantly.
 - **Right-click menu** on any item, drawn to match the fan: a header with the item's picture, name, size and date, then Open, Open with…, Show in Explorer and Copy path, with line icons and key hints. Works with the keyboard too (menu key or `Shift+F10`, then `↑` `↓` `Enter`).
 - **Real thumbnails** for pictures, videos and PDFs instead of generic icons. They load in the background (three at a time), fade in, and are remembered on disk, so a file you have seen once shows its picture the moment the fan opens. They also follow the file when you drag it out. Videos and PDFs use the same thumbnails Explorer shows (PDFs need a PDF thumbnail handler, e.g. Edge or Acrobat); files without one keep their normal icon.
-- **Fast.** Pinned buttons run a ~100 ms launcher; icons and labels are pre-loaded.
+- **Fast, even in huge folders.** Pinned buttons run a ~100 ms launcher; icons and labels are pre-loaded. Exact file icons (every `.exe`, `.lnk`, `.msi` has its own) and big folder listings load on background threads, and a fast scroll builds only a few items per frame, so the fan keeps gliding through folders with thousands of files.
 - **Compact settings window** (density, speed, glass opacity, magnification, arc curve, item count, sorting…) with animated switches, a sliding sort control and a reset button on every slider.
 - **Updates itself, politely.** Foldy checks this repository's latest GitHub release (at start-up and every 6 hours; switch it off in Settings). When there is a newer version it asks **Update now / Later**. *Later* leaves a green **Update** button next to *Reset all* (and an entry in the tray menu). The download comes only from this repo's releases and is checked against its size and SHA-256 before it is installed.
 - **Pins harder.** If Windows refuses every automatic pin route, a small card appears whose icon you drag onto the taskbar.
@@ -86,7 +87,7 @@ Run from source without building: `pip install PyQt6 pywin32`, then `python src\
 
 Build, then attach `dist\Foldy.exe` to a GitHub release. Keep the file name `Foldy.exe` so the website's download button and the in-app updater work.
 
-For updates to be offered, tag the release with a version **higher than the one users run** (`v1.3.6` → `v1.3.7`, `v1.4.0`…) and publish it as a normal release (not a draft or pre-release). Bump `VERSION` in `src/foldy/constants.py` and the two numbers in `packaging/version_info.txt` before building. People on v1.0.0 have no updater yet, so they install v1.1.0 or newer once by hand.
+For updates to be offered, tag the release with a version **higher than the one users run** (`v1.3.7` → `v1.4.0`, `v1.4.1`…) and publish it as a normal release (not a draft or pre-release). Bump `VERSION` in `src/foldy/constants.py` and the two numbers in `packaging/version_info.txt` before building. People on v1.0.0 have no updater yet, so they install v1.1.0 or newer once by hand.
 
 The website's download counter adds up the `.exe` downloads of all releases (it includes updates downloaded by the app).
 
@@ -115,6 +116,8 @@ src/
     winutil.py          Windows helpers: taskbar geometry, UI Automation, click tracker
     dropzone.py         files dropped on a pinned button: move/copy decision and transfer
     shortcuts.py        shortcut icons, .lnk creation, taskbar pinning, folder picker
+    iconstyle.py        colours, textures and lettering of a stack's icon (drawn in code), saved per stack
+    icon_editor.py      the "Customize icon" window
     updater.py          GitHub release check, verified download
     update_window.py    'Update now / Later' window and the drag-to-pin helper
     controls.py         animated switch and sliding segmented control

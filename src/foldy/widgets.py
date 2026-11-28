@@ -1,4 +1,4 @@
-"""Reusable widgets: trash icon, smooth progress bar, step-by-step progress window, hold-to-confirm ring button."""
+"""Reusable widgets: trash and palette icons, smooth progress bar, step-by-step progress window, hold-to-confirm ring button."""
 import math, threading, time, traceback
 from PyQt6.QtCore import QObject, QPointF, QRectF, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
@@ -35,6 +35,32 @@ def trash_pixmap(size, color, lid=0.0, dpr=1.0):
     lid_path.lineTo(0.60 * s, 0.23 * s); lid_path.lineTo(0.60 * s, 0.31 * s)
     p.drawPath(lid_path)
     p.restore()
+    p.end()
+    return pm
+
+
+def palette_pixmap(size, color, dpr=1.0):
+    """Paint-palette icon (the 'customise' button), drawn with a painter like the trash can."""
+    pm = QPixmap(int(size * dpr), int(size * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    s = float(size)
+    pen = QPen(color, s * 0.075)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap); pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen); p.setBrush(Qt.BrushStyle.NoBrush)
+    body = QPainterPath()                                          # a rounded blob with a thumb notch at the bottom right
+    body.moveTo(0.50 * s, 0.14 * s)
+    body.cubicTo(0.20 * s, 0.14 * s, 0.10 * s, 0.40 * s, 0.14 * s, 0.60 * s)
+    body.cubicTo(0.18 * s, 0.82 * s, 0.38 * s, 0.88 * s, 0.50 * s, 0.86 * s)
+    body.cubicTo(0.62 * s, 0.84 * s, 0.56 * s, 0.70 * s, 0.66 * s, 0.68 * s)
+    body.cubicTo(0.80 * s, 0.66 * s, 0.90 * s, 0.60 * s, 0.88 * s, 0.46 * s)
+    body.cubicTo(0.84 * s, 0.26 * s, 0.70 * s, 0.14 * s, 0.50 * s, 0.14 * s)
+    p.drawPath(body)
+    p.setPen(Qt.PenStyle.NoPen); p.setBrush(color)
+    for x, y in ((0.31, 0.38), (0.47, 0.28), (0.65, 0.32), (0.26, 0.58)):
+        p.drawEllipse(QPointF(x * s, y * s), s * 0.055, s * 0.055)
     p.end()
     return pm
 

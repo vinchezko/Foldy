@@ -23,17 +23,76 @@ def ui_font(px):
     return f
 
 
-def icon_pixmap(path, is_dir):
-    """Shell icon lookups are slow: cache one per extension (or one for all folders)."""
+def icon_key(path, is_dir):
+    """What an icon is cached under: one for all folders, one per extension, one per file for types with their own icon."""
     ext = "" if is_dir else os.path.splitext(path)[1].lower()
-    key = "<dir>" if is_dir else (path if ext in UNIQUE_EXT else ext or "<none>")
-    pm = _icon_cache.get(key)
+    return "<dir>" if is_dir else (path if ext in UNIQUE_EXT else ext or "<none>")
+
+
+_generic = {}
+_loader = None
+
+
+def generic_icon(is_dir):
+    """A neutral stand-in drawn in code (no shell call), shown for the instant before the exact icon arrives."""
+    pm = _generic.get(is_dir)
     if pm is None:
+        pm = QPixmap(96, 96)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        if is_dir:
+            p.setBrush(QColor(214, 170, 70)); p.drawRoundedRect(QRectF(10, 22, 40, 20), 6, 6)
+            p.setBrush(QColor(240, 196, 92)); p.drawRoundedRect(QRectF(8, 32, 80, 50), 9, 9)
+        else:
+            p.setBrush(QColor(196, 202, 214)); p.drawRoundedRect(QRectF(22, 10, 52, 76), 7, 7)
+            p.setBrush(QColor(150, 158, 174)); p.drawRect(QRectF(34, 30, 28, 4)); p.drawRect(QRectF(34, 42, 28, 4)); p.drawRect(QRectF(34, 54, 20, 4))
+        p.end()
+        _generic[is_dir] = pm
+    return pm
+
+
+def _store_icon(key, path, pm):
+    """A background lookup finished (GUI thread): remember it. If Windows had nothing, ask Qt's own provider once."""
+    if pm is None or pm.isNull():
+        try:
+            pm = ICONS.icon(QFileInfo(path)).pixmap(64, 64)
+        except Exception:
+            pm = None
+    _icon_cache[key] = pm if pm is not None and not pm.isNull() else generic_icon(os.path.isdir(path))
+
+
+def icon_loader():
+    global _loader
+    if _loader is None:
+        _loader = thumbs.IconLoader(_store_icon)
+    return _loader
+
+
+def icon_pixmap(path, is_dir, wait=False):
+    """Shell icon lookups are slow: cache one per extension (or one for all folders). An icon that is not cached yet is
+    fetched on a background thread and a placeholder is returned (the fan swaps the real one in when it arrives);
+    wait=True looks it up right here instead (only for the warm-up at start)."""
+    key = icon_key(path, is_dir)
+    pm = _icon_cache.get(key)
+    if pm is not None:
+        return pm
+    if wait:
         pm = thumbs.shell_icon(path)                          # Explorer's large icon (Qt's provider returns tiny ones for some types)
         if pm is None or pm.isNull():
             pm = ICONS.icon(QFileInfo(path)).pixmap(64, 64)
         _icon_cache[key] = pm
-    return pm
+        return pm
+    icon_loader().request(key, path)
+    return generic_icon(is_dir)
+
+
+def _trim_labels():
+    """Drop only the oldest pills when the cache is full (wiping all of it would re-render every visible label at once)."""
+    if len(_label_cache) > 700:
+        for k in list(_label_cache)[:250]:
+            del _label_cache[k]
 
 
 def glass_label(text, dpr):
@@ -63,8 +122,7 @@ def glass_label(text, dpr):
     p.setFont(font); p.setPen(QColor(245, 245, 247))
     p.drawText(body, Qt.AlignmentFlag.AlignCenter, t)
     p.end()
-    if len(_label_cache) > 400:
-        _label_cache.clear()
+    _trim_labels()
     _label_cache[key] = (pm, w, h, m)
     return _label_cache[key]
 
@@ -99,8 +157,7 @@ def accent_label(text, dpr, hot=False):
     p.setFont(font); p.setPen(QColor(255, 255, 255))
     p.drawText(body, Qt.AlignmentFlag.AlignCenter, t)
     p.end()
-    if len(_label_cache) > 400:
-        _label_cache.clear()
+    _trim_labels()
     _label_cache[key] = (pm, w, h, m)
     return _label_cache[key]
 
@@ -245,7 +302,7 @@ def list_entries(folder, sort):
     try:
         with os.scandir(folder) as it:
             for k, e in enumerate(it):
-                if k > 4000:
+                if k > 20000:                                             # (it used to stop at 4000 files, in no particular order)
                     break
                 if e.name.startswith(".") or e.name.lower() in ("desktop.ini", "thumbs.db"):
                     continue
@@ -284,7 +341,10 @@ def entries_for(folder, sort, force=False):
             import threading
             threading.Thread(target=refresh_smart, args=(folder,), daemon=True).start()
         return hit[3]
-    if hit and hit[0] == m and hit[1] == sort and time.time() - hit[2] < 20 and not smart:
+    if hit and hit[0] == m and hit[1] == sort and not smart:
+        if time.time() - hit[2] >= 20:                          # the folder itself did not change, but a file inside may have been edited:
+            import threading                                    # show the list we have right now and re-read it in the background
+            threading.Thread(target=refresh_folder, args=(folder, sort), daemon=True).start()
         return hit[3]
     ent = list_entries(folder, sort)
     _entries_cache[folder] = (m, sort, time.time(), ent)
@@ -307,6 +367,24 @@ def refresh_smart(folder):
         pass
     finally:
         _refreshing.discard(folder)
+
+
+def refresh_folder(folder, sort):
+    """Re-read an ordinary folder on a worker thread, so the next open is fresh without anyone waiting for the disk."""
+    key = (folder, sort)
+    if key in _refreshing:
+        return
+    _refreshing.add(key)
+    try:
+        try:
+            m = os.stat(folder).st_mtime
+        except OSError:
+            m = None
+        _entries_cache[folder] = (m, sort, time.time(), list_entries(folder, sort))
+    except Exception:
+        pass
+    finally:
+        _refreshing.discard(key)
 
 
 def match_rank(name, q):
@@ -333,15 +411,17 @@ def filter_entries(entries, query, folder):
 
 class Elt:
     """One fan element: a file/folder item (idx >= 0), the 'Open in Explorer' header or the 'back' pill."""
-    def __init__(self, kind, path, name, dpr, is_dir=False, idx=-1, mtime=0):
+    def __init__(self, kind, path, name, dpr, is_dir=False, idx=-1, mtime=0, sync=True):
         self.kind, self.path, self.idx, self.mtime = kind, path, idx, mtime
+        self._rc = None                                             # (frame, icon rect, label rect): geometry cached for one frame
         self.label, self.lw, self.lh, self.lm = glass_label(name, dpr)
         self.name, self.dpr, self.fillk, self._hot = name, dpr, 0.0, None      # fillk: 0..1, how much of the pill the drop-blue has covered
+        self.ikey = None if kind in BAR_KINDS else icon_key(path, is_dir)
         self.icon = None if kind in BAR_KINDS else icon_pixmap(path, is_dir)
         self.thumb, self.old_icon, self.thumb_k = None, None, 1.0   # real thumbnail (images / videos / PDFs), the icon it replaced, fade-in 0..1
         self.dummy = False                                          # the 'Folder is empty' / 'No matches' placeholder
         if kind == "item" and thumbs.wants(path, is_dir):
-            pm = thumbs.get().fetch(path, mtime, dpr)
+            pm = thumbs.get().fetch(path, mtime, dpr, sync)
             if pm is not None:
                 self.icon, self.thumb = pm, pm
         self.nav = False                                            # a folder that can be opened inside the fan
@@ -354,6 +434,12 @@ class Elt:
         """Re-render the pill with new text (the search pill changes with every key)."""
         self.label, self.lw, self.lh, self.lm = glass_label(text, self.dpr)
         self.name, self._hot = text, None
+
+    def set_icon(self, pm):
+        """The exact icon arrived (it was a placeholder): it fades in over it."""
+        if pm is None or self.icon is pm:
+            return
+        self.old_icon, self.icon, self.thumb_k = self.icon, pm, 0.0
 
     def set_thumb(self, pm):
         """A real thumbnail arrived: it fades in over the icon."""

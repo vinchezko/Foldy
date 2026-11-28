@@ -172,10 +172,16 @@ def timer_resolution(on):
         pass
 
 
+_GAKS = None
+
+
 def key_down(vk):
+    global _GAKS
     try:
-        import ctypes
-        return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
+        if _GAKS is None:                                         # looked up once, not on every 30 ms poll
+            import ctypes
+            _GAKS = ctypes.windll.user32.GetAsyncKeyState
+        return bool(_GAKS(vk) & 0x8000)
     except Exception:
         return False
 

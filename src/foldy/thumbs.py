@@ -5,7 +5,8 @@ thumbnail provider (IShellItemImageFactory), i.e. exactly what Explorer shows: i
 codecs / PDF handler installed on this PC. Anything without a real thumbnail simply keeps its normal icon.
 
 All decoding happens on one background thread, newest request first, so the fan never waits for a disk or a codec.
-The finished picture is framed (rounded corners, hairline border, play badge on videos) on the main thread.
+The finished picture is framed (rounded corners, hairline border, play badge on videos) on the worker too; the main
+thread only turns it into a pixmap.
 """
 import ctypes, hashlib, os, sys, threading, time
 from collections import OrderedDict
@@ -147,7 +148,7 @@ _main_shell = None
 
 def shell_icon(path, size=128):
     """The file type's icon at full quality (Explorer's 'extra large' icon). Qt's own provider hands back tiny 16-32 px
-    icons for many types (scripts, installers...), which then look small and blurry. Runs on the GUI thread."""
+    icons for many types (scripts, installers...), which then look small and blurry. Runs on the calling thread (the GUI thread only for the first, warm-up lookups: the fan uses IconLoader)."""
     global _main_shell
     if sys.platform != "win32":
         return None
@@ -162,10 +163,11 @@ def shell_icon(path, size=128):
 
 
 # ---------------------------------------------------------------- framing (main thread: QPixmap lives here)
-def frame(img, video=False, dpr=1.0):
-    """Thumbnail picture -> a square pixmap: the picture fitted inside, rounded, with a hairline border."""
+def frame_image(img, video=False, dpr=1.0):
+    """Thumbnail picture -> a square QImage: the picture fitted inside, rounded, with a hairline border.
+    Works on a QImage (not a QPixmap), so it is safe to run on a worker thread: the GUI thread never pays for it."""
     S_ = int(CANVAS * max(1.0, dpr))
-    pm = QPixmap(S_, S_)
+    pm = QImage(S_, S_, QImage.Format.Format_ARGB32_Premultiplied)
     pm.fill(Qt.GlobalColor.transparent)
     sm = img.scaled(S_ - 8, S_ - 8, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
     r = QRectF((S_ - sm.width()) / 2, (S_ - sm.height()) / 2, sm.width(), sm.height())
@@ -187,8 +189,12 @@ def frame(img, video=False, dpr=1.0):
                          QPointF(c.x() + d * .24, c.y())])
         p.drawPolygon(tri)
     p.end()
-    pm.setDevicePixelRatio(1.0)
     return pm
+
+
+def frame(img, video=False, dpr=1.0):
+    """Same, as a QPixmap (GUI thread only)."""
+    return QPixmap.fromImage(frame_image(img, video, dpr))
 
 
 # ---------------------------------------------------------------- the loader
@@ -233,29 +239,33 @@ class Thumbs(QObject):
         """The cached thumbnail pixmap (or None) without queueing anything."""
         return self.cache.get(self._key(path, mtime))
 
-    def fetch(self, path, mtime=0, dpr=1.0):
-        """The cached thumbnail pixmap, or None. Looks in memory, then in the thumbnail folder on disk (so a file you
-        have seen once shows its picture the instant the fan opens). Otherwise it is queued and `ready` fires later."""
+    def fetch(self, path, mtime=0, dpr=1.0, sync=True):
+        """The cached thumbnail pixmap, or None. Looks in memory, then (sync=True: when the fan opens) in the thumbnail
+        folder on disk, so a file you have seen once shows its picture the instant the fan opens. While scrolling
+        (sync=False) the GUI thread touches neither disk nor decoder: the request is queued, `ready` fires later."""
         k = self._key(path, mtime)
         if k in self.cache:
             self.cache.move_to_end(k)
             return self.cache[k]
         self.dpr = dpr
-        try:
-            df = _disk_file(path, mtime)
-            if os.path.exists(df):
-                img = QImage(df)
-                if not img.isNull():
-                    pm = frame(img, os.path.splitext(path)[1].lower() in VIDEO, dpr)
-                    self._remember(k, pm)
-                    return pm
-        except Exception as ex:
-            log(f"thumbs: disk cache read failed ({ex!r})")
+        if sync:
+            try:
+                df = _disk_file(path, mtime)
+                if os.path.exists(df):
+                    img = QImage(df)
+                    if not img.isNull():
+                        pm = frame(img, os.path.splitext(path)[1].lower() in VIDEO, dpr)
+                        self._remember(k, pm)
+                        return pm
+            except Exception as ex:
+                log(f"thumbs: disk cache read failed ({ex!r})")
         if k not in self.pending:
             with self.cv:
                 self.pending.add(k)
-                self.stack.append((k, path, mtime))
-                del self.stack[:-300]                           # only the newest requests matter (the user scrolled on)
+                self.stack.append((k, path, mtime, dpr))
+                for old in self.stack[:-300]:                   # only the newest requests matter (the user scrolled on)...
+                    self.pending.discard(old[0])                # ...and a dropped one must be allowed to be asked for again
+                del self.stack[:-300]
                 self.cv.notify()
             if not self.workers:
                 for n in range(self.WORKERS):
@@ -279,9 +289,18 @@ class Thumbs(QObject):
             with self.cv:
                 while not self.stack:
                     self.cv.wait()
-                k, path, mtime = self.stack.pop()                # newest first
-            img, ext = None, os.path.splitext(path)[1].lower()
-            if ext in IMAGE_QT:                                  # pictures Qt can read: fastest, no COM involved
+                k, path, mtime, dpr = self.stack.pop()           # newest first
+            img, ext, cached = None, os.path.splitext(path)[1].lower(), False
+            try:                                                 # seen before? the decoded picture is on disk
+                df = _disk_file(path, mtime)
+                if os.path.exists(df):
+                    img = QImage(df)
+                    cached = not img.isNull()
+                    if not cached:
+                        img = None
+            except Exception:
+                img = None
+            if img is None and ext in IMAGE_QT:                                  # pictures Qt can read: fastest, no COM involved
                 try:
                     img = _qt_image(path)
                 except Exception as ex:
@@ -291,7 +310,7 @@ class Thumbs(QObject):
                     img = shell.thumbnail(path)
                 except Exception as ex:
                     log(f"thumbs: Windows gave no thumbnail for {os.path.basename(path)} ({ex!r})")
-            if img is not None:
+            if img is not None and not cached:
                 try:
                     os.makedirs(_disk_dir(), exist_ok=True)
                     img.save(_disk_file(path, mtime), "PNG")
@@ -300,7 +319,13 @@ class Thumbs(QObject):
                         _prune_disk()
                 except Exception:
                     pass
-            self._done.emit(k, path, img if img is not None else QImage())
+            framed = QImage()
+            if img is not None:
+                try:
+                    framed = frame_image(img, ext in VIDEO, dpr)          # rounded corners + border, off the GUI thread
+                except Exception as ex:
+                    log(f"thumbs: framing {os.path.basename(path)} failed ({ex!r})")
+            self._done.emit(k, path, framed)
 
     # worker -> main thread (queued signal, so framing/QPixmap work happens on the GUI thread)
     _done = pyqtSignal(object, str, QImage)
@@ -310,15 +335,66 @@ class Thumbs(QObject):
 
     def _finish(self, k, path, img):
         self.pending.discard(k)
-        pm = None
-        if not img.isNull():
-            try:
-                pm = frame(img, os.path.splitext(path)[1].lower() in VIDEO, self.dpr)
-            except Exception as ex:
-                log(f"thumbs: framing {os.path.basename(path)} failed ({ex!r})")
+        pm = QPixmap.fromImage(img) if not img.isNull() else None     # (already framed by the worker)
         self._remember(k, pm)
         if pm is not None:
             self.ready.emit(path)
+
+
+class IconLoader(QObject):
+    """Exact shell icons (every .exe / .lnk / .msi has its own) fetched on one background thread. Asking Windows for one is
+    slow (it opens the file and reads its resources, and antivirus may look at it first): doing that on the GUI thread
+    while you scroll through a folder full of installers is what made the fan freeze. The fan now shows a neutral
+    placeholder at once and swaps the real icon in when it arrives. Newest request first, like the thumbnails."""
+    ready = pyqtSignal(str)                                      # the icon for this key is now in the cache
+    _done = pyqtSignal(str, str, QImage)
+
+    def __init__(self, sink):
+        super().__init__()
+        self.sink = sink                                         # sink(key, path, QPixmap | None): stores it (GUI thread)
+        self.stack, self.pending = [], set()
+        self.cv = threading.Condition()
+        self.worker = None
+        self._done.connect(self._finish, Qt.ConnectionType.QueuedConnection)
+
+    def request(self, key, path):
+        if key in self.pending:
+            return
+        with self.cv:
+            self.pending.add(key)
+            self.stack.append((key, path))
+            for old in self.stack[:-200]:                        # the user scrolled on: a dropped request may be asked for again
+                self.pending.discard(old[0])
+            del self.stack[:-200]
+            self.cv.notify()
+        if self.worker is None:
+            self.worker = threading.Thread(target=self._run, name="foldy-icons", daemon=True)
+            self.worker.start()
+
+    def _run(self):
+        shell = None
+        if sys.platform == "win32":
+            try:
+                shell = _Shell()
+            except Exception as ex:
+                log(f"thumbs: icon provider unavailable ({ex!r})")
+        while True:
+            with self.cv:
+                while not self.stack:
+                    self.cv.wait()
+                key, path = self.stack.pop()
+            img = None
+            if shell is not None:
+                try:
+                    img = shell.image(path, 128, 0x4)            # ICONONLY
+                except Exception as ex:
+                    log(f"thumbs: shell icon failed for {os.path.basename(path)} ({ex!r})")
+            self._done.emit(key, path, img if img is not None else QImage())
+
+    def _finish(self, key, path, img):
+        self.pending.discard(key)
+        self.sink(key, path, QPixmap.fromImage(img) if not img.isNull() else None)
+        self.ready.emit(key)
 
 
 _thumbs = None

@@ -14,7 +14,7 @@ LAUNCHER_ZIP = p("build", "launcher.zip")                      # made by packagi
 DROP_BINARIES = ("opengl32sw", "d3dcompiler", "qt6pdf", "qt6svg", "qt6quick", "qt6qml",
                  "qsvg", "qpdf", "qtiff", "qwebp", "qgif", "qicns", "qtga", "qwbmp")
 APP_MODULES = ["app", "constants", "fan", "ctxmenu", "hub", "installer", "ipc", "keyhook", "render", "settings", "settings_window", "smartdialog",
-               "shortcuts", "styles", "thumbs", "uninstaller", "util", "widgets", "winutil"]
+               "icon_editor", "iconstyle", "shortcuts", "styles", "thumbs", "uninstaller", "util", "widgets", "winutil"]
 
 a = Analysis(
     [p("src", "run_foldy.py")],

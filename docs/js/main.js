@@ -586,3 +586,15 @@ if (hold) {
 })();
 
 })();
+
+/* ---- v1.4: icon customizer demo (texture tiles + emoji; nothing is sent anywhere) */
+(function(){
+  var folder=document.getElementById('ic-folder'),text=document.getElementById('ic-text');
+  if(!folder||!text)return;
+  var tiles=[].slice.call(document.querySelectorAll('.ic-tile'));
+  tiles.forEach(function(t){t.addEventListener('click',function(){
+    tiles.forEach(function(x){x.classList.toggle('on',x===t)});
+    folder.className='ic-folder tx-'+t.getAttribute('data-t');
+  })});
+  [].forEach.call(document.querySelectorAll('.ic-em'),function(b){b.addEventListener('click',function(){text.textContent=b.getAttribute('data-e')})});
+})();

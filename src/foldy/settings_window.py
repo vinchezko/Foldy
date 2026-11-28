@@ -1,17 +1,19 @@
 """The settings window: a sidebar with five pages (Appearance, Behaviour, Features, Stacks, Updates & about) instead of one
 long wall of controls. Everything applies instantly; 'Preview fan' is always one click away at the bottom."""
 import html, os
-from PyQt6.QtCore import QRectF, QSize, QTimer, QUrl, Qt
-from PyQt6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
+from PyQt6.QtCore import QSize, QTimer, QUrl, Qt
+from PyQt6.QtGui import QColor, QDesktopServices, QIcon, QPixmap
 from PyQt6.QtWidgets import (QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSlider,
                              QStackedWidget, QToolButton, QVBoxLayout, QWidget, QMessageBox)
 from .constants import AUTHOR, FEEDBACK_URL, GITHUB, VERSION
 from .controls import Segmented, Toggle, update_pixmap
+from . import iconstyle
+from .icon_editor import IconEditor
 from .render import real_folder, smart_spec
 from .settings import DEFAULTS, S
-from .shortcuts import folder_id
+from .shortcuts import folder_id, stack_style
 from .styles import SIDEBAR_QSS
-from .widgets import trash_pixmap
+from .widgets import palette_pixmap, trash_pixmap
 from .winutil import asset, autostart_enabled, dark_titlebar, data_dir, open_path, set_autostart
 
 
@@ -80,8 +82,9 @@ class ToggleRow(QWidget):
 
 
 class StackRow(QFrame):
-    """One pinned stack: coloured letter badge (the same hue as its taskbar icon), name, path. Click opens its folder."""
-    def __init__(self, folder, on_remove=None):
+    """One pinned stack: badge (the colour, texture and lettering of its taskbar icon), name, path. Click opens its folder;
+    the palette button customises the icon, the bin removes the stack."""
+    def __init__(self, folder, on_remove=None, on_customize=None):
         super().__init__()
         self.setObjectName("stackrow")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -90,15 +93,7 @@ class StackRow(QFrame):
         name = os.path.basename(folder.rstrip("\\/")) or folder
         lay = QHBoxLayout(self); lay.setContentsMargins(10, 8, 12, 8); lay.setSpacing(12)
         badge = QLabel(); badge.setFixedSize(34, 34)
-        pm = QPixmap(68, 68); pm.fill(Qt.GlobalColor.transparent)
-        p = QPainter(pm); p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        hue = int(folder_id(folder)[:4], 16) % 360
-        p.setBrush(QColor.fromHsv(hue, 170, 235)); p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(QRectF(2, 2, 64, 64), 16, 16)
-        f = QFont("Segoe UI"); f.setPixelSize(36); f.setWeight(QFont.Weight.Bold)
-        p.setFont(f); p.setPen(QColor(255, 255, 255, 240))
-        p.drawText(QRectF(0, 0, 68, 68), Qt.AlignmentFlag.AlignCenter, name[:1].upper())
-        p.end()
+        pm = QPixmap.fromImage(iconstyle.badge_image(name, folder_id(folder), stack_style(folder_id(folder)), 68))
         pm.setDevicePixelRatio(2.0)
         badge.setPixmap(pm)
         col = QVBoxLayout(); col.setSpacing(0)
@@ -111,6 +106,12 @@ class StackRow(QFrame):
         col.addWidget(t); col.addWidget(h)
         go = QLabel("Open ↗"); go.setObjectName("hint")
         lay.addWidget(badge); lay.addLayout(col, 1); lay.addWidget(go)
+        if on_customize is not None:
+            cb = QToolButton(); cb.setObjectName("cstack"); cb.setToolTip("Customize this stack's icon")
+            cb.setIcon(QIcon(palette_pixmap(16, QColor(150, 200, 235), dpr=2.0))); cb.setIconSize(QSize(16, 16))
+            cb.setCursor(Qt.CursorShape.PointingHandCursor)
+            cb.clicked.connect(lambda *_: on_customize(folder))
+            lay.addWidget(cb)
         if on_remove is not None:
             rm = QToolButton(); rm.setObjectName("rmstack"); rm.setToolTip("Remove this stack from Foldy")
             rm.setIcon(QIcon(trash_pixmap(16, QColor(255, 140, 152), dpr=2.0))); rm.setIconSize(QSize(16, 16))
@@ -337,8 +338,16 @@ class SettingsWindow(QWidget):
             n.setObjectName("hint"); n.setWordWrap(True)
             self.stack_lay.addWidget(n)
         for f in folders:
-            self.stack_lay.addWidget(StackRow(f, self.confirm_remove))
+            self.stack_lay.addWidget(StackRow(f, self.confirm_remove, self.customize))
         self.stack_lay.addStretch(1)
+
+    def customize(self, folder):
+        """Open the icon editor for a stack (one editor at a time)."""
+        w = getattr(self, "icon_win", None)
+        if w is not None:
+            w.close(); w.deleteLater()
+        self.icon_win = IconEditor(self.hub, folder, self)
+        self.icon_win.show(); self.icon_win.raise_(); self.icon_win.activateWindow()
 
     def confirm_remove(self, folder):
         name = os.path.basename(folder.rstrip("\\/")) or folder

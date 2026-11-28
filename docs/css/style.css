@@ -279,3 +279,43 @@ footer{display:flex;justify-content:space-between;padding:22px max(4vw,18px);bor
 .dl-count[hidden]{display:none}
 .dl-count b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
 @keyframes dlin{from{opacity:0}to{opacity:1}}
+
+/* ---- v1.4: icon customizer demo */
+.ic-demo{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.ic-prev{flex:0 0 120px;display:grid;place-items:center}
+.ic-folder{position:relative;width:112px;height:80px;border-radius:14px;display:grid;place-items:center;box-shadow:0 12px 28px rgba(0,0,0,.4);margin-top:14px}
+.ic-folder::before{content:"";position:absolute;left:8px;top:-12px;width:50px;height:20px;border-radius:8px 8px 0 0;background:inherit;filter:brightness(.6)}
+.ic-folder::after{content:"";position:absolute;inset:0;border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,.18),transparent 45%,rgba(0,0,0,.14));pointer-events:none}
+.ic-folder span{position:relative;z-index:1;font:700 40px/1 'Segoe UI','Segoe UI Emoji',system-ui,sans-serif;color:#fff;text-shadow:-1.5px -1.5px 0 rgba(0,0,0,.55),1.5px -1.5px 0 rgba(0,0,0,.55),-1.5px 1.5px 0 rgba(0,0,0,.55),1.5px 1.5px 0 rgba(0,0,0,.55)}
+.ic-side{flex:1 1 220px;min-width:0}
+.ic-tiles{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
+.ic-tile{all:unset;box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;padding:5px 2px;border:1px solid rgba(255,255,255,.1);border-radius:10px;background:rgba(255,255,255,.03)}
+.ic-tile:hover,.ic-tile:focus-visible{border-color:rgba(76,201,255,.6)}
+.ic-tile.on{border:2px solid #4cc9ff;background:rgba(76,201,255,.1)}
+.ic-tile em{font-style:normal;font-size:10px;color:var(--muted)}
+.ic-sw{display:block;width:30px;height:22px;border-radius:6px}
+.ic-ems{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.ic-em{all:unset;cursor:pointer;width:30px;height:30px;display:grid;place-items:center;border-radius:8px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);font-size:16px}
+.ic-em:hover,.ic-em:focus-visible{border-color:#4cc9ff}
+.ic-letter{font-size:12px;color:var(--muted)}
+.tx-solid{background:linear-gradient(180deg,#b97bff,#a35cff)}
+.tx-gradient{background:linear-gradient(135deg,#ff5cb8,#a35cff 55%,#4c8dff)}
+.tx-zebra{background:repeating-linear-gradient(115deg,#f4f4f0 0 9px,#121214 9px 17px)}
+.tx-forest{background:radial-gradient(circle at 80% 18%,rgba(255,255,255,.3) 0 6%,transparent 7%),linear-gradient(180deg,#467a6e,#265436 55%,#123022)}
+.tx-ocean{background:repeating-radial-gradient(ellipse at 50% 140%,rgba(255,255,255,.22) 0 6px,transparent 7px 14px),linear-gradient(180deg,#5cd6f0,#2680d6 50%,#103490)}
+.tx-sunset{background:radial-gradient(circle at 50% 62%,#fffadc 0 12%,rgba(255,200,110,.5) 30%,transparent 42%),linear-gradient(180deg,#583caa,#f06292 45%,#ffb054 75%,#ffd678)}
+.tx-leopard{background:radial-gradient(circle,transparent 0 22%,#36200f 24% 38%,transparent 40%) 0 0/16px 16px,#e8a844}
+.tx-carbon{background:conic-gradient(#16161a 25%,#3a3b44 0 50%,#16161a 0 75%,#3a3b44 0) 0 0/10px 10px}
+.tx-galaxy{background:radial-gradient(circle at 25% 35%,rgba(130,80,255,.6),transparent 45%),radial-gradient(circle at 75% 65%,rgba(255,80,190,.5),transparent 45%),radial-gradient(1px 1px at 20% 70%,#fff,transparent),radial-gradient(1px 1px at 60% 25%,#fff,transparent),radial-gradient(1.5px 1.5px at 85% 40%,#fff,transparent),#120e34}
+.tx-camo{background:radial-gradient(ellipse 30% 18% at 25% 30%,#242c1c 98%,transparent),radial-gradient(ellipse 28% 16% at 70% 65%,#424e2a 98%,transparent),radial-gradient(ellipse 24% 14% at 60% 20%,#968654 98%,transparent),#68743a}
+.tx-honey{background:radial-gradient(circle,rgba(150,84,10,.0) 0 55%,rgba(150,84,10,.8) 58% 70%,transparent 72%) 0 0/14px 12px,linear-gradient(180deg,#ffd65a,#f0961e)}
+
+/* ---- v1.4: older release notes and the FAQ start folded */
+.old-ver,.faq-all{margin-top:34px}
+.old-ver>summary,.faq-all>summary{justify-content:flex-start;align-items:center;gap:12px;padding:16px 0}
+.old-ver>summary::after,.faq-all>summary::after{margin-left:auto}
+.old-ver>summary h3{margin:0;font-size:18px;font-weight:600}
+.old-ver .spot{padding-bottom:18px}
+.faq-all>summary{font-size:18px}
+.faq-all .cnt{background:rgba(76,201,255,.15);color:var(--accent);border-radius:999px;font-size:12px;padding:2px 9px}
+.faq-all .faq{margin-top:6px;padding-bottom:16px}

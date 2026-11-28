@@ -75,5 +75,16 @@ QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}
 QPushButton#update{padding:8px 12px;}
 QToolButton#rmstack{background:transparent;border:1px solid transparent;border-radius:8px;padding:6px;}
 QToolButton#rmstack:hover{background:#3a252b;border-color:#5a2f36;}
+QToolButton#cstack{background:transparent;border:1px solid transparent;border-radius:8px;padding:6px;}
+QToolButton#cstack:hover{background:#243342;border-color:#3d6e92;}
 QMessageBox{background:#1d1e23;}
+"""
+
+
+EDITOR_QSS = SIDEBAR_QSS + """
+QDialog{background:#1d1e23;}
+QLineEdit{background:#2a2c34;border:1px solid #3d404a;border-radius:8px;padding:6px 10px;selection-background-color:#4cc9ff;selection-color:#06222e;font-size:14px;}
+QLineEdit:focus{border-color:#4cc9ff;}
+QToolButton#emoji{background:#262830;border:1px solid #333640;border-radius:8px;font:17px 'Segoe UI Emoji','Segoe UI';}
+QToolButton#emoji:hover{background:#30333d;border-color:#4cc9ff;}
 """

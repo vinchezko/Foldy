@@ -4,8 +4,8 @@ from PyQt6.QtCore import QFileInfo, QMimeData, QPoint, QPointF, QRect, QRectF, Q
 from PyQt6.QtGui import (QColor, QCursor, QDrag, QFont, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap,
                          QRadialGradient, QRegion)
 from PyQt6.QtWidgets import QApplication, QWidget
-from .constants import (BASE_ICON, BASE_SP, C_CLOSE, C_OPEN, K, SCROLL_C, SCROLL_K, STAG_CLOSE, STAG_OPEN,
-                        WIN_W)
+from .constants import (BASE_ICON, BASE_SP, BUILD_PER_FRAME, C_CLOSE, C_OPEN, K, KEEP, PREFETCH, SCROLL_C, SCROLL_C_EDGE,
+                        SCROLL_K, STAG_CLOSE, STAG_OPEN, WIN_W)
 from . import dropzone
 from . import render
 from . import ctxmenu, thumbs
@@ -13,8 +13,45 @@ from .cancel_corner import corner
 from .keyhook import KeyHook
 from .render import BAR_KINDS, Elt, entries_for, filter_entries, glass_label, real_folder
 from .settings import S, log
-from .util import clamp, smooth
+from .util import clamp, smooth, spring_step
 from .winutil import key_down, open_path, pin_topmost, set_click_through, timer_resolution, window_at_cursor
+
+
+_scaled, _shadow = {}, {}
+
+
+def scaled_icon(pm, isz, dpr):
+    """The icon pre-shrunk (once) to about twice the size it is drawn at. Squeezing a 128 px shell icon down to 36 px on
+    every frame is slow and shimmers while it scales; from this size the per-frame scaling is cheap and clean."""
+    t = int(isz * 2 * max(1.0, dpr))
+    if pm.width() <= t * 1.25:
+        return pm
+    k = (pm.cacheKey(), t)
+    hit = _scaled.get(k)
+    if hit is None:
+        if len(_scaled) > 800:
+            for old in list(_scaled)[:400]:
+                del _scaled[old]
+        hit = _scaled[k] = pm.scaled(t, t, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    return hit
+
+
+def shadow_blob():
+    """The soft contact shadow under an icon, rendered once (it used to build a gradient and paint it for every icon on
+    every frame)."""
+    pm = _shadow.get("blob")
+    if pm is None:
+        w, h = 128, 31
+        pm = QPixmap(w, h)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        g = QRadialGradient(QPointF(w / 2, h / 2), w / 2)
+        g.setColorAt(0, QColor(0, 0, 0, 120)); g.setColorAt(1, QColor(0, 0, 0, 0))
+        p.setPen(Qt.PenStyle.NoPen); p.setBrush(g); p.drawEllipse(QRectF(0, 0, w, h))
+        p.end()
+        _shadow["blob"] = pm
+    return pm
 
 
 SPRING_T = {"in": 0.75, "back": 0.55}                         # seconds a carried file must rest on a folder / the back pill
@@ -57,9 +94,11 @@ class FanOverlay(QWidget):
         self.last = self.t_open = 0.0
         self.lift, self.tb_y = 0.0, 0.0
         self.res_on = False
+        self._fr, self._dirty = 0, None                             # frame counter (geometry cache), area painted last frame
+        self._more = False                                          # items in view are still waiting to be built (see ensure_cache)
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self.timer.setInterval(8)
+        self.timer.setInterval(16)                                  # set to the display's refresh period in build()
         self.timer.timeout.connect(self.step)
         self.poll = QTimer(self, interval=30)                       # outside-click / Esc detection (only while open)
         self.poll.timeout.connect(self.check_dismiss)
@@ -67,11 +106,19 @@ class FanOverlay(QWidget):
         self.drag_timer.timeout.connect(self.drag_tick)
         self.winId()                                                # create the native window up-front
         thumbs.get().ready.connect(self.on_thumb)                   # real thumbnails arrive from a background thread
+        render.icon_loader().ready.connect(self.on_icon)            # ...and so do the exact icons of .exe / .lnk files
 
     # ---- build
     def build(self, folder, loc):
         scr = QApplication.primaryScreen()
         g, a, self.dpr = scr.geometry(), scr.availableGeometry(), scr.devicePixelRatio()
+        try:                                                        # one animation frame per display refresh: no wasted
+            hz = float(scr.refreshRate())                           # frames, no beat against the monitor, far less CPU
+        except Exception:
+            hz = 60.0
+        self.timer.setInterval(int(clamp(1000.0 / hz if hz >= 24 else 16.0, 4, 16)))
+        self._fr += 1
+        self._dirty = None
         d = S["density"]
         self.isz, self.sp = round(BASE_ICON * d), round(BASE_SP * d)
         bottom = g.y() + g.height()
@@ -127,29 +174,59 @@ class FanOverlay(QWidget):
         fan = QRegion(QRect(left, top, right - left, int(self.tb_y) - top))
         self.region = fan.united(QRegion(QRect(int(self.origin.x()) - 36, int(self.tb_y), 72, int(H - self.tb_y))))
         self.setMask(self.region)                                   # everything else stays click-through
+        self.update()
 
-    def ensure_cache(self):
+    def ensure_cache(self, budget=None):
+        """Make sure every item in (or just next to) the viewport has its Elt. Building one (icon, pill, picture) costs real
+        time, so while you scroll only `budget` of them are built per frame: on a fast fling the rest follow on the next
+        frames instead of all landing in one long frame (that was the stutter in big folders). Opening, going into a
+        folder and filtering pass no budget: they need the whole viewport at once. Items a little further out are built
+        in advance, at most two per frame, so they are usually ready before you scroll to them."""
+        n = len(self.entries)
         lo = max(0, int(math.floor(self.scroll)) - 1)
-        hi = min(len(self.entries) - 1, int(math.ceil(self.scroll)) + self.cap)
+        hi = min(n - 1, int(math.ceil(self.scroll)) + self.cap)
+        cache, sync = self.cache, not self.is_open
+        left = -1 if budget is None else budget
+        self._more = False
         for i in range(lo, hi + 1):
-            if i not in self.cache:
-                mt, name, path, isd = self.entries[i]
-                el = self.reuse.pop(path, None)                     # a filter keeps the items that are still shown
-                if el is not None:
-                    el.idx = i
-                else:
-                    el = Elt("item", path, name, self.dpr, isd, i, mt)
-                    el.nav = bool(isd) and path != self.folder
-                    el.dummy = path == self.folder
-                    if self.is_open and self.fresh is not None:     # filtered in: springs out of the button like on open
-                        el.x = el.v = el.target = 0.0
-                        el.pending, el.t_switch = 1.0, self.fresh + min(self.n_new, self.cap) * STAG_OPEN / max(S["speed"], 0.1)
-                        self.n_new += 1
-                    elif self.is_open:                              # scrolled in after the open animation
-                        el.x = el.target = el.pending = 1.0
-                self.cache[i] = el
-        for i in [k for k in self.cache if k < lo - 2 or k > hi + 2]:
-            del self.cache[i]
+            if i not in cache:
+                if left == 0:
+                    self._more = True                                 # (the timer keeps running until they are all built)
+                    break
+                self.make_elt(i, sync)
+                left -= 1 if left > 0 else 0
+        if self.is_open and self.fresh is None and self.maxscroll > 0 and not self._more:
+            built = 0
+            for k in range(1, PREFETCH + 1):
+                for i in (hi + k, lo - k):
+                    if 0 <= i < n and i not in cache:
+                        self.make_elt(i, False)
+                        built += 1
+                        if built >= 2:
+                            break
+                if built >= 2:
+                    break
+        far_lo, far_hi = lo - PREFETCH - KEEP, hi + PREFETCH + KEEP
+        if len(cache) > self.cap + 2 * (PREFETCH + KEEP) + 4:
+            for i in [k for k in cache if k < far_lo or k > far_hi]:
+                del cache[i]
+
+    def make_elt(self, i, sync):
+        mt, name, path, isd = self.entries[i]
+        el = self.reuse.pop(path, None)                             # a filter keeps the items that are still shown
+        if el is not None:
+            el.idx = i
+        else:
+            el = Elt("item", path, name, self.dpr, isd, i, mt, sync)
+            el.nav = bool(isd) and path != self.folder
+            el.dummy = path == self.folder
+            if self.is_open and self.fresh is not None:             # filtered in: springs out of the button like on open
+                el.x = el.v = el.target = 0.0
+                el.pending, el.t_switch = 1.0, self.fresh + min(self.n_new, self.cap) * STAG_OPEN / max(S["speed"], 0.1)
+                self.n_new += 1
+            elif self.is_open:                                      # scrolled in after the open animation
+                el.x = el.target = el.pending = 1.0
+        self.cache[i] = el
 
     # ---- open / close
     def _bars(self):
@@ -240,6 +317,8 @@ class FanOverlay(QWidget):
     def hide_now(self):
         self.stop_all()
         self.is_open = False
+        self._dirty = None
+        self._more = False
         self.hide()
         self.cache, self.header, self.back, self.dropbar = {}, None, None, None
         self.searchbar, self.query, self.applied, self.all_entries, self.kb = None, "", "", [], None
@@ -316,6 +395,11 @@ class FanOverlay(QWidget):
         return QPointF(self.origin.x() + self.bend * self.R * (1 - math.cos(th)),
                        self.origin.y() - self.start - self.R * math.sin(th))
 
+    def arc_xy(self, s):
+        th = s / self.R
+        return (self.origin.x() + self.bend * self.R * (1 - math.cos(th)),
+                self.origin.y() - self.start - self.R * math.sin(th))
+
     def fade(self, u):
         """Opacity from the item's rest position along the arc: fades past both ends, and hints at more content."""
         sp = self.sp
@@ -350,23 +434,25 @@ class FanOverlay(QWidget):
             lo_k, hi_k = idxs[0], idxs[-1]
             e0, e1 = ex[int(clamp(i0, lo_k, hi_k))], ex[int(clamp(i0 + 1, lo_k, hi_k))]
             delta = e0 * (1 - t) + e1 * t
+        pos, scroll, cache = [], self.scroll, self.cache
         for i in idxs:
-            el = self.cache[i]
-            u = (i - self.scroll) * sp                               # rest position along the arc
-            el.slot = self.arc(u + ex[i] - delta)
+            el = cache[i]
+            u = (i - scroll) * sp                                    # rest position along the arc
+            x, y = self.arc_xy(u + ex[i] - delta)
             el.edge = self.fade(u)
+            pos.append((el, x, y))
         count = min(len(self.entries), self.cap)
-        self.header.slot = self.arc(count * sp + 10 + head_extra - delta)
+        hx, hy = self.arc_xy(count * sp + 10 + head_extra - delta)
         # keep every icon clear of the taskbar: magnification, push-apart, DPI scale or taskbar size can never overlap it
         limit, need = self.tb_y - 6, 0.0
-        for i in idxs:
-            el = self.cache[i]
+        for el, x, y in pos:
             if el.edge > 0.25:
-                need = max(need, el.slot.y() + self.isz * el.hs * (0.78 + 0.22 * el.edge) / 2 - limit)
+                need = max(need, y + isz * el.hs * (0.78 + 0.22 * el.edge) / 2 - limit)
         self.lift = max(need, self.lift + (need - self.lift) * 0.35)      # rises at once, settles smoothly
-        if self.lift > 0.01:
-            for el in list(self.cache.values()) + [self.header]:
-                el.slot = QPointF(el.slot.x(), el.slot.y() - self.lift)
+        lf = self.lift if self.lift > 0.01 else 0.0
+        for el, x, y in pos:
+            el.slot = QPointF(x, y - lf)
+        self.header.slot = QPointF(hx, hy - lf)
         if self.dropbar is not None:                                # stacked above the header, spaced by the pills' real heights
             gap = (self.header.lh + self.dropbar.lh) * 1.06 / 2 + 18
             self.dropbar.slot = QPointF(self.header.slot.x(), self.header.slot.y() - gap)
@@ -391,20 +477,21 @@ class FanOverlay(QWidget):
         # scrolling: spring-chase with rubber-band at the ends, settles on a slot when you stop
         if self.maxscroll > 0 or self.scroll != 0.0:
             idle = now - self.t_wheel
-            if idle > 0.35:
-                self.target = float(round(clamp(self.target, 0.0, self.maxscroll)))
-            elif idle > 0.12:
+            if idle > 0.14:                                         # the wheel went quiet: settle on a slot. The spring is
+                self.target = float(round(clamp(self.target, 0.0, self.maxscroll)))   # continuous in speed, so this blends in
+            elif idle > 0.08:
                 self.target = clamp(self.target, 0.0, self.maxscroll)
-            n = int(dt / 0.004) + 1
-            h = dt / n
-            for _ in range(n):
-                self.sv += (SCROLL_K * (self.target - self.scroll) - SCROLL_C * self.sv) * h
-                self.scroll += self.sv * h
+            c = SCROLL_C if 0.0 <= self.scroll <= self.maxscroll else SCROLL_C_EDGE    # bounce only past the ends
+            self.scroll, self.sv = spring_step(self.scroll, self.sv, self.target, SCROLL_K, c, dt)
             if abs(self.target - self.scroll) > 0.002 or abs(self.sv) > 0.01:
                 busy = True
             else:
                 self.scroll, self.sv = self.target, 0.0
-            self.ensure_cache()
+            self.ensure_cache(BUILD_PER_FRAME)
+        elif self._more:                                            # (a filter / folder swap left some items to build)
+            self.ensure_cache(BUILD_PER_FRAME)
+        if self._more:
+            busy = True
 
         # hover focus: where along the arc the cursor is -> gaussian magnification around it
         amp, f = 0.0, self.focus
@@ -421,18 +508,16 @@ class FanOverlay(QWidget):
             xm = self.origin.x() + self.bend * self.R * (1 - math.cos(sm / self.R))
             amp = S["magnify"] * math.exp(-((self.mouse.x() - xm) / 320.0) ** 2) * (0.55 if carry else 1.0)
 
-        for el in list(self.cache.values()) + self._bars():
+        a16, a14, a5 = 1 - math.exp(-dt * 16), 1 - math.exp(-dt * 14), dt * 5.0
+        elts = list(self.cache.values()) + self._bars()
+        for el in elts:
             if el.t_switch is not None:
                 if now >= el.t_switch:
                     el.target, el.t_switch = el.pending, None
                 else:
                     busy = True
-            c = C_OPEN if el.target > 0.5 else C_CLOSE
-            n = int(dts / 0.004) + 1
-            h = dts / n
-            for _ in range(n):
-                el.v += (K * (el.target - el.x) - c * el.v) * h
-                el.x += el.v * h
+            if el.x != el.target or el.v:                           # (a settled item costs nothing)
+                el.x, el.v = spring_step(el.x, el.v, el.target, K, C_OPEN if el.target > 0.5 else C_CLOSE, dts)
             if abs(el.target - el.x) > 0.002 or abs(el.v) > 0.02:
                 busy = True
             else:
@@ -445,7 +530,7 @@ class FanOverlay(QWidget):
             if fill >= el.fillk:
                 el.fillk = fill
             else:
-                el.fillk += (fill - el.fillk) * (1 - math.exp(-dt * 16))    # leaving: the border runs back
+                el.fillk += (fill - el.fillk) * a16                         # leaving: the border runs back
                 if el.fillk < 0.01:
                     el.fillk = 0.0
             if fill > 0 or el.fillk > 0:
@@ -456,14 +541,14 @@ class FanOverlay(QWidget):
                 d = (el.idx - f) * self.sp
                 t = 1 + amp * math.exp(-(d / (1.5 * self.sp)) ** 2) * el.edge
                 lt = 1.0 if (S["labels"] or self.hover is el) else 0.0
-                el.lv += (lt - el.lv) * (1 - math.exp(-dt * 14))
+                el.lv += (lt - el.lv) * a14
                 if abs(lt - el.lv) > 0.01:
                     busy = True
-            el.hs += (t - el.hs) * (1 - math.exp(-dt * 16))
+            el.hs += (t - el.hs) * a16
             if abs(t - el.hs) > 0.003:
                 busy = True
             if el.thumb_k < 1.0:                                    # a real thumbnail fading in over the icon
-                el.thumb_k = min(1.0, el.thumb_k + dt * 5.0)
+                el.thumb_k = min(1.0, el.thumb_k + a5)
                 busy = True
 
         db = self.dropbar
@@ -473,11 +558,12 @@ class FanOverlay(QWidget):
         if sb is not None and not self.query and sb.target == 0 and sb.t_switch is None and sb.x <= 0.01:
             self.searchbar = None                                   # the search pill has folded away
         self.layout()
+        self._fr += 1                                               # new frame: cached geometry is stale
         if self.is_open and self.kb is not None:
             self.hover = self.cache.get(self.kb)
         elif self.mouse is not None and self.is_open:
             self.hover = self.hit(self.mouse)
-        self.update(self.bounds)
+        self.invalidate(elts)
         if not busy:
             self.timer.stop()
             if self.res_on:
@@ -492,6 +578,40 @@ class FanOverlay(QWidget):
     def cur_pos(self, el):
         return QPointF(self.origin.x() + el.x * (el.slot.x() - self.origin.x()),
                        self.origin.y() + el.x * (el.slot.y() - self.origin.y()))
+
+    def rc(self, el):
+        """rects(el), computed once per frame (painting, hit-testing and the dirty area all ask for it)."""
+        c = el._rc
+        if c is not None and c[0] == self._fr:
+            return c[1], c[2]
+        icon, lab = self.rects(el)
+        el._rc = (self._fr, icon, lab)
+        return icon, lab
+
+    def invalidate(self, elts):
+        """Repaint only the part of the window the fan actually occupies this frame (plus where it was last frame),
+        not its whole bounding box: far fewer pixels to draw and to hand to the compositor."""
+        r = None
+        for el in elts:
+            if el.x < 0.01 or el.edge < 0.01:
+                continue
+            icon, lab = self.rc(el)
+            q = lab if icon is None else icon.united(lab)
+            pad = el.lm * (lab.width() / el.lw if el.lw else 1.0) + 5.0
+            q = q.adjusted(-pad, -pad, pad, pad)
+            r = q if r is None else r.united(q)
+        if self.idrag is not None:
+            s = self.isz * 1.35
+            q = QRectF(self.idrag_pos.x() - s, self.idrag_pos.y() - s, 2 * s, 2 * s)
+            r = q if r is None else r.united(q)
+        cur = r.toAlignedRect() if r is not None else None
+        prev, self._dirty = self._dirty, cur
+        if cur is None:
+            cur = prev
+        elif prev is not None:
+            cur = cur.united(prev)
+        if cur is not None:
+            self.update(cur.intersected(self.rect()))
 
     def rects(self, el):
         pos = self.cur_pos(el)
@@ -514,7 +634,7 @@ class FanOverlay(QWidget):
         for el in list(self.cache.values()) + self._bars():
             if el.x < 0.3 or el.edge < 0.2:
                 continue
-            for r in self.rects(el):
+            for r in self.rc(el):
                 if r is not None:
                     bb = r if bb is None else bb.united(r)
         return bb
@@ -537,7 +657,7 @@ class FanOverlay(QWidget):
         for el in reversed(cands):
             if el.x < 0.6 or el.edge < 0.35:
                 continue
-            icon, lab = self.rects(el)
+            icon, lab = self.rc(el)
             if icon is not None and icon.adjusted(-3, -3, 3, 3).contains(pt):
                 return el
             if lab.contains(pt) and el.lv > 0.5:
@@ -574,19 +694,20 @@ class FanOverlay(QWidget):
         for el in sorted(self.cache.values(), key=lambda q: q.hs) + self._bars():   # hovered item paints on top
             if el.x < 0.01 or el.edge < 0.01:
                 continue
-            icon, lab = self.rects(el)
+            icon, lab = self.rc(el)
             ghost = 0.3 if self.is_dragged(el) else 1.0                  # the item you are carrying away stays as a faint ghost
             if icon is not None:
                 p.setOpacity(clamp(el.x * 2.2, 0.0, 1.0) * el.edge * ghost)
                 sh = QRectF(icon.center().x() - icon.width() * .46, icon.bottom() - icon.height() * .12,
                             icon.width() * .92, icon.height() * .22)
-                g = QRadialGradient(sh.center(), sh.width() / 2)
-                g.setColorAt(0, QColor(0, 0, 0, 120)); g.setColorAt(1, QColor(0, 0, 0, 0))
-                p.setPen(Qt.PenStyle.NoPen); p.setBrush(g); p.drawEllipse(sh)
+                blob = shadow_blob()
+                p.drawPixmap(sh, blob, QRectF(blob.rect()))
                 if el.thumb_k < 1.0 and el.old_icon is not None:    # thumbnail fading in: icon underneath, picture over it
-                    p.drawPixmap(icon, el.old_icon, QRectF(el.old_icon.rect()))
+                    oi = scaled_icon(el.old_icon, self.isz, self.dpr)
+                    p.drawPixmap(icon, oi, QRectF(oi.rect()))
                     p.setOpacity(clamp(el.x * 2.2, 0.0, 1.0) * el.edge * ghost * el.thumb_k)
-                p.drawPixmap(icon, el.icon, QRectF(el.icon.rect()))
+                ic = scaled_icon(el.icon, self.isz, self.dpr)
+                p.drawPixmap(icon, ic, QRectF(ic.rect()))
             op = clamp((el.x - 0.05) * 1.6, 0.0, 1.0) * el.edge * el.lv * ghost
             if op > 0.01:
                 p.setOpacity(op)
@@ -789,6 +910,18 @@ class FanOverlay(QWidget):
                 if pm is not None:
                     el.set_thumb(pm)
                     self.start_timer()
+
+    def on_icon(self, key):
+        """The exact icon of a file type (or of one .exe) finished loading in the background: swap it in where it is shown."""
+        if self.header is None or not self.cache:
+            return
+        pm = render._icon_cache.get(key)
+        if pm is None:
+            return
+        for el in self.cache.values():
+            if el.kind == "item" and el.ikey == key and el.thumb is None and el.icon is not pm:
+                el.set_icon(pm)
+                self.start_timer()
 
     # ---- input
     def can_drag(self, el):

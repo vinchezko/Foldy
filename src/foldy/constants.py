@@ -2,7 +2,7 @@
 import os
 
 
-APP, VERSION = "Foldy", "1.3.6"
+APP, VERSION = "Foldy", "1.4.0"
 
 
 AUTHOR, GITHUB = "vinchezko", "https://github.com/vinchezko"
@@ -47,7 +47,16 @@ K, C_OPEN, C_CLOSE = 300.0, 22.0, 32.0         # open/close spring (open is slig
 STAG_OPEN, STAG_CLOSE = 0.018, 0.010           # seconds between successive items
 
 
-SCROLL_K, SCROLL_C = 140.0, 20.0               # scroll spring (zeta ~0.85: glides, tiny rubber-band overshoot)
+SCROLL_K, SCROLL_C = 230.0, 30.33              # scroll spring: critically damped (zeta = 1) -> glides, never bounces or "ticks"
+
+
+SCROLL_C_EDGE = 19.0                           # ...and a touch under-damped only while rubber-banding past either end
+
+
+BUILD_PER_FRAME = 4                            # items a scroll may build in ONE frame (the rest follow on the next frames): no hitch on a fast fling
+
+
+PREFETCH, KEEP = 3, 8                          # items built ahead of the viewport (a few per frame) / items kept behind it
 
 
 UNIQUE_EXT = {".exe", ".lnk", ".ico", ".url", ".scr", ".msi", ".appx", ".cur"}

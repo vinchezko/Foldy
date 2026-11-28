@@ -1,41 +1,54 @@
 """Per-folder shortcut icons, .lnk creation, taskbar pinning and the native folder picker."""
-import hashlib, os, struct, time, traceback
-from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, Qt
-from PyQt6.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter
+import hashlib, os, time, traceback
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QWidget
+from . import iconstyle
 from .settings import log
-from .winutil import data_dir, shortcut_cmd
+from .winutil import data_dir, docs_path, pinned_dir, shortcut_cmd
 
 
 def folder_id(folder):
     return hashlib.md5(os.path.normpath(folder).lower().encode()).hexdigest()[:10]
 
 
-def make_icon(folder, fid):
-    """Per-folder .ico: a coloured folder (hue from the path hash) with the folder's first letter on it."""
-    img = QImage(256, 256, QImage.Format.Format_ARGB32)
-    img.fill(Qt.GlobalColor.transparent)
-    p = QPainter(img)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    base = QColor.fromHsv(int(fid[:4], 16) % 360, 170, 235)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(base.darker(125))
-    p.drawRoundedRect(QRectF(22, 46, 108, 60), 16, 16)                        # folder tab
-    g = QLinearGradient(0, 70, 0, 234)
-    g.setColorAt(0, base.lighter(118)); g.setColorAt(1, base)
-    p.setBrush(g)
-    body = QRectF(16, 76, 224, 158)
-    p.drawRoundedRect(body, 24, 24)                                           # folder body
-    f = QFont("Segoe UI"); f.setPixelSize(110); f.setWeight(QFont.Weight.Bold)
-    p.setFont(f); p.setPen(QColor(255, 255, 255, 235))
-    p.drawText(body, Qt.AlignmentFlag.AlignCenter, (os.path.basename(folder.rstrip("\\/")) or folder)[:1].upper())
-    p.end()
-    ba = QByteArray(); buf = QBuffer(ba); buf.open(QIODevice.OpenModeFlag.WriteOnly)
-    img.save(buf, "PNG")
-    png = bytes(ba)
-    path = os.path.join(data_dir(), "Icons", fid + ".ico")
-    with open(path, "wb") as fh:                                              # ICO container holding one PNG
-        fh.write(struct.pack("<HHH", 0, 1, 1) + struct.pack("<BBBBHHII", 0, 0, 0, 0, 1, 32, len(png), 22) + png)
+_SAVED = object()
+
+
+def icons_dir():
+    return os.path.join(data_dir(), "Icons")
+
+
+def stack_style(fid):
+    """The saved icon style of a stack (see iconstyle.py), or None for the automatic look."""
+    return iconstyle.get(icons_dir(), fid)
+
+
+def purge_icons(fid, keep=None):
+    """Delete a stack's .ico files (every version of it), except the one called `keep`."""
+    d = icons_dir()
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return
+    for n in names:
+        low = n.lower()
+        if low.endswith(".ico") and (low == fid + ".ico" or low.startswith(fid + "-")) and os.path.join(d, n) != keep:
+            try:
+                os.remove(os.path.join(d, n))
+            except OSError:
+                pass
+
+
+def make_icon(folder, fid, style=_SAVED, tag=""):
+    """Per-folder .ico: a folder with the stack's colour / texture and its lettering (by default a hue from the path hash
+    and the folder's first letter). `tag` makes a new file name, because Windows keeps showing an icon it has cached under
+    the old name."""
+    if style is _SAVED:
+        style = stack_style(fid)
+    name = os.path.basename(folder.rstrip("\\/")) or folder
+    path = os.path.join(icons_dir(), fid + tag + ".ico")
+    with open(path, "wb") as fh:
+        fh.write(iconstyle.ico_bytes(iconstyle.folder_image(name, fid, style)))
     return path
 
 
@@ -53,6 +66,32 @@ def lnk_desc(path):
         return l.GetDescription(1024)
     except Exception:
         return None
+
+
+def set_link_icon(folder, icon_path):
+    """Point every shortcut of a stack (Documents\\Foldy and its pinned taskbar copy) at a new icon file. Needs COM on this
+    thread. Returns (shortcuts changed, how many of those are taskbar pins)."""
+    import pythoncom
+    want = "Foldy stack: " + folder
+    changed = pins = 0
+    for d, is_pin in ((docs_path(), False), (pinned_dir(), True)):
+        if not os.path.isdir(d):
+            continue
+        for f in os.listdir(d):
+            path = os.path.join(d, f)
+            if not f.lower().endswith(".lnk") or (lnk_desc(path) or "").strip() != want:
+                continue
+            try:
+                link = _new_link()
+                pf = link.QueryInterface(pythoncom.IID_IPersistFile)
+                pf.Load(path, 2)
+                link.SetIconLocation(icon_path, 0)
+                pf.Save(path, 0)
+                changed += 1
+                pins += is_pin
+            except Exception:
+                log(f"icon: could not update {path}\n" + traceback.format_exc())
+    return changed, pins
 
 
 def migrate_shortcut(path, fast):

@@ -4,7 +4,7 @@ from PyQt6.QtCore import QObject, QTimer, QUrl, Qt, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QIcon
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import QApplication, QFileDialog, QFileIconProvider, QMenu, QSystemTrayIcon
-from . import dropzone, render, thumbs, updater
+from . import dropzone, iconstyle, render, thumbs, updater
 from .constants import APP, AUTHOR, DETACHED, FEEDBACK_URL, GITHUB, INSTALL_DIR, NO_WINDOW, PIPE, VERSION
 from .dragwatch import DragWatch
 from .fan import FanOverlay
@@ -12,13 +12,26 @@ from .render import _label_cache, entries_for, glass_label, icon_pixmap
 from .settings import RUNTIME, S, load_settings, log, save_settings, settings_file
 from .settings_window import SettingsWindow
 from .smartdialog import SmartDialog
-from .shortcuts import (folder_id, lnk_desc, make_icon, make_shortcut, migrate_shortcut, pick_folder,
-                        pin_to_taskbar, warm_imports)
+from .shortcuts import (folder_id, icons_dir, lnk_desc, make_icon, make_shortcut, migrate_shortcut, pick_folder,
+                        pin_to_taskbar, purge_icons, set_link_icon, stack_style, warm_imports)
 from .uninstaller import UninstallConfirm, uninstall_steps
 from .update_window import UpdatePrompt
 from .widgets import StepWindow
 from .winutil import (_BTN_CACHE, asset, bring_to_front, data_dir, docs_path, enum_taskbar_buttons, key_down, locate_button,
                       open_path, pick_button, pinned_dir, set_autostart, start_click_tracker, taskbar_rect)
+
+
+def restart_explorer():
+    """Windows only forgets a removed pin (or notices a changed pin icon) when Explorer restarts. Blocks: run it on a worker."""
+    subprocess.run(["taskkill", "/f", "/im", "explorer.exe"], creationflags=NO_WINDOW, capture_output=True)
+    for _ in range(40):
+        time.sleep(0.15)
+        out = subprocess.run(["tasklist", "/fi", "imagename eq explorer.exe", "/nh"], creationflags=NO_WINDOW,
+                             capture_output=True, text=True).stdout
+        if "explorer.exe" in out.lower():
+            break
+    else:
+        subprocess.Popen(["explorer.exe"], creationflags=NO_WINDOW)
 
 
 class Bridge(QObject):
@@ -27,6 +40,8 @@ class Bridge(QObject):
     checked = pyqtSignal(bool, dict, bool)       # update check finished: reached GitHub?, newest release, asked by the user?
     removed = pyqtSignal(str, int)               # a stack was removed: folder, how many taskbar buttons went with it
     dropped = pyqtSignal(str, str, int, str)     # files dropped on a button: verb, folder, how many were done, error
+    listed = pyqtSignal(str)                     # a stack's folder was listed in the background and is ready to be warmed
+    styled = pyqtSignal(str, int, bool, str)     # a stack's icon was restyled: folder, taskbar pins changed, taskbar refreshed?, error
 
 
 class Hub:
@@ -46,6 +61,8 @@ class Hub:
         self.bridge.checked.connect(self.on_checked)
         self.bridge.dropped.connect(self.on_dropped)
         self.bridge.removed.connect(self.on_removed)
+        self.bridge.styled.connect(self.on_styled)
+        self.bridge.listed.connect(self._warm_items)
         self.update_info, self.update_prompt, self.update_win = None, None, None
         self._checking = False
         self._stacks, self._warm_queue = [], []
@@ -80,7 +97,7 @@ class Hub:
         self.tray.activated.connect(self.on_tray)                            # one click is enough
         self.tray.show()
         QTimer.singleShot(1000, self.prebuild_settings)                      # build the window ahead of time: the first click is instant
-        icon_pixmap(data_dir(), True)                                # warm the folder-icon cache
+        icon_pixmap(data_dir(), True, wait=True)                     # warm the folder-icon cache (the one lookup that waits)
         threading.Thread(target=warm_imports, daemon=True).start()
         threading.Thread(target=self._scan_stacks, daemon=True).start()
         threading.Thread(target=updater.cleanup_downloads, daemon=True).start()
@@ -305,12 +322,22 @@ class Hub:
         if render.smart_spec(folder):                                # (these scan other folders: never on the GUI thread)
             threading.Thread(target=render.refresh_smart, args=(folder,), daemon=True).start()
             return QTimer.singleShot(60, self._warm_next)
+        threading.Thread(target=self._list_worker, args=(folder,), daemon=True).start()   # reading a big folder never blocks the GUI
+
+    def _list_worker(self, folder):
+        try:
+            entries_for(folder, S["sort"])                           # (fills the cache; the folder may hold thousands of files)
+        except Exception:
+            pass
+        self.bridge.listed.emit(folder)
+
+    def _warm_items(self, folder):
         try:
             dpr = QApplication.primaryScreen().devicePixelRatio()
-            for mt, name, path, isd in entries_for(folder, S["sort"])[:int(S["maxvis"])]:
-                icon_pixmap(path, isd)
+            for mt, name, path, isd in entries_for(folder, S["sort"])[:int(S["maxvis"])]:   # (cached by now: instant)
+                icon_pixmap(path, isd)                               # exact icons load on their own thread
                 if thumbs.wants(path, isd):
-                    thumbs.get().fetch(path, mt, dpr)                # thumbnails are ready before the fan is opened
+                    thumbs.get().fetch(path, mt, dpr, False)         # thumbnails too: ready before the fan is opened
                 glass_label(name, dpr)
             glass_label("Open in Explorer  ↗", dpr)
         except Exception:
@@ -478,23 +505,16 @@ class Hub:
                                 pass
             finally:
                 pythoncom.CoUninitialize()
+            purge_icons(folder_id(folder))                         # every version of its icon...
             try:
-                os.remove(os.path.join(data_dir(), "Icons", folder_id(folder) + ".ico"))
-            except OSError:
+                iconstyle.forget(icons_dir(), folder_id(folder))   # ...and its customised look
+            except Exception:
                 pass
             smart_root = os.path.normcase(os.path.join(data_dir(), "Smart"))
             if render.smart_spec(folder) and os.path.normcase(os.path.abspath(folder)).startswith(smart_root + os.sep):
                 shutil.rmtree(folder, ignore_errors=True)          # only ever Foldy's own rule folder, never a real one
             if pins:                                               # Windows only forgets a removed pin when Explorer restarts
-                subprocess.run(["taskkill", "/f", "/im", "explorer.exe"], creationflags=NO_WINDOW, capture_output=True)
-                for _ in range(40):
-                    time.sleep(0.15)
-                    out = subprocess.run(["tasklist", "/fi", "imagename eq explorer.exe", "/nh"], creationflags=NO_WINDOW,
-                                         capture_output=True, text=True).stdout
-                    if "explorer.exe" in out.lower():
-                        break
-                else:
-                    subprocess.Popen(["explorer.exe"], creationflags=NO_WINDOW)
+                restart_explorer()
         except Exception:
             log(traceback.format_exc())
         self.bridge.removed.emit(folder, pins)
@@ -505,6 +525,49 @@ class Hub:
         render._entries_cache.pop(folder, None)
         name = os.path.basename(folder.rstrip("\\/")) or folder
         self.status(f"Removed “{name}”. Your folder and files were not touched.")
+        if self.settings_win is not None:
+            self.settings_win.refresh_stacks()
+
+    # ---- customise a stack's icon (colour, text / emoji, texture): new .ico, shortcuts re-pointed, taskbar refreshed
+    def apply_icon_style(self, folder, style, refresh=True):
+        fid = folder_id(folder)
+        name = os.path.basename(folder.rstrip(chr(92) + "/")) or folder
+        self.status(f"Updating the icon of “{name}”…")
+        try:
+            iconstyle.put(icons_dir(), fid, style)
+            tag = "-" + format(int(time.time()), "x")               # a new file name: Windows would keep showing the cached old icon
+            ico = make_icon(folder, fid, stack_style(fid), tag)
+        except Exception as ex:
+            log(traceback.format_exc())
+            return self.note(f"Couldn't update the icon ({ex}).")
+        threading.Thread(target=self._style_worker, args=(folder, fid, ico, refresh), daemon=True).start()
+
+    def _style_worker(self, folder, fid, ico, refresh):
+        pins, refreshed, err = 0, False, ""
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+            try:
+                _, pins = set_link_icon(folder, ico)
+            finally:
+                pythoncom.CoUninitialize()
+            purge_icons(fid, keep=ico)                              # the old versions are no longer referenced
+            if pins and refresh:
+                restart_explorer()
+                refreshed = True
+        except Exception:
+            log(traceback.format_exc())
+            err = traceback.format_exc().strip().splitlines()[-1]
+        self.bridge.styled.emit(folder, pins, refreshed, err)
+
+    def on_styled(self, folder, pins, refreshed, err):
+        name = os.path.basename(folder.rstrip("\\/")) or folder
+        if err:
+            self.status(f"Couldn't update the icon of “{name}”: {err}")
+        elif pins and not refreshed:
+            self.status(f"Icon of “{name}” saved. Restart Explorer (or sign out) to see it on the taskbar.")
+        else:
+            self.status(f"Icon of “{name}” updated.")
         if self.settings_win is not None:
             self.settings_win.refresh_stacks()
 
@@ -575,7 +638,7 @@ def run(msg):
     def _hook(et, ev, tb):                                        # PyQt aborts the whole process on an unhandled error in a slot/event:
         log("".join(traceback.format_exception(et, ev, tb)))      # log it instead, so one bug never takes Foldy down
     sys.excepthook = _hook
-    log(f"Foldy {VERSION} starting (build: v1.3.6)")
+    log(f"Foldy {VERSION} starting (build: v1.4.0)")
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)                             # tray app: closing settings must not quit
     app.setApplicationName(APP)
@@ -596,5 +659,8 @@ def run(msg):
         set_autostart(True)
         open(marker, "w").close()
     hub = Hub(server, first)
+    import gc
+    gc.collect(); gc.freeze()                                        # start-up objects live forever: keep the collector away from them
+    gc.set_threshold(20000, 20, 50)                                  # ...and run it rarely, so no collection pause lands inside an animation frame
     QTimer.singleShot(0, lambda: hub.handle(msg))
     sys.exit(app.exec())
